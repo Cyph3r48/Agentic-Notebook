@@ -25,6 +25,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://si_user:change_me@postgres:5432/structured_intelligence"
     )
+    AUTO_CREATE_SCHEMA: bool = Field(default=True)
+    AUTO_RUN_MIGRATIONS: bool = Field(default=True)
     
     # ============================================
     # VECTOR DATABASE (Qdrant)
@@ -64,9 +66,10 @@ class Settings(BaseSettings):
     JWT_SECRET: str = Field(default_factory=lambda: secrets.token_urlsafe(32))
     JWT_ALGORITHM: str = Field(default="HS256")
     ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=60)
+    REFRESH_TOKEN_EXPIRE_DAYS: int = Field(default=14)
     
     # Initial admin user
-    ADMIN_EMAIL: str = Field(default="admin@structuredintelligence.local")
+    ADMIN_EMAIL: str = Field(default="admin@structuredintelligence.com")
     ADMIN_PASSWORD: str = Field(default="change_me_immediately")
     ADMIN_NAME: str = Field(default="System Administrator")
     
@@ -87,7 +90,7 @@ class Settings(BaseSettings):
     # ============================================
     # CORS
     # ============================================
-    CORS_ORIGINS: List[str] = Field(
+    CORS_ORIGINS: str | List[str] = Field(
         default=["http://localhost:3000", "http://localhost:5173"]
     )
     
@@ -101,11 +104,12 @@ class Settings(BaseSettings):
     # DOCUMENT PROCESSING
     # ============================================
     MAX_UPLOAD_SIZE_MB: int = Field(default=100)
-    ALLOWED_EXTENSIONS: List[str] = Field(
+    ALLOWED_EXTENSIONS: str | List[str] = Field(
         default=[".md", ".pdf", ".docx", ".txt", ".html"]
     )
     CHUNK_SIZE: int = Field(default=1000)
     CHUNK_OVERLAP: int = Field(default=200)
+    UPLOAD_DIR: str = Field(default="/app/uploads")
     
     @validator("ALLOWED_EXTENSIONS", pre=True)
     def parse_extensions(cls, v):

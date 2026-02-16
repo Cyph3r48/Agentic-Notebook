@@ -3,7 +3,8 @@ Structured Intelligence - Main Application
 Production-grade NotebookLM alternative with SMC integration
 """
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
@@ -12,10 +13,14 @@ import time
 from loguru import logger
 
 from app.core.config import settings
-from app.core.database import init_db, close_db
-from app.core.redis_client import init_redis, close_redis
+from app.core.bootstrap import ensure_admin_user
+from app.core.database import init_db, close_db, is_db_healthy
+from app.core.errors import AppError, error_payload
+from app.core.migrations import run_startup_migrations
+from app.core.redis_client import init_redis, close_redis, is_redis_healthy
 from app.api.v1 import api_router
 from app.middleware.rate_limit import RateLimitMiddleware
+from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
 
 
@@ -23,6 +28,11 @@ from app.middleware.security import SecurityHeadersMiddleware
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     logger.info("🚀 Starting Structured Intelligence...")
+
+    if settings.AUTO_RUN_MIGRATIONS:
+        logger.info("🧱 Running Alembic migrations...")
+        await run_startup_migrations()
+        logger.info("✅ Alembic migrations complete")
     
     # Initialize database
     await init_db()
@@ -31,6 +41,10 @@ async def lifespan(app: FastAPI):
     # Initialize Redis
     await init_redis()
     logger.info("✅ Redis initialized")
+
+    # Ensure initial admin user exists
+    await ensure_admin_user()
+    logger.info("✅ Admin bootstrap completed")
     
     # Initialize SMC integration
     if settings.SMC_ENABLED:
@@ -74,6 +88,9 @@ app.add_middleware(
 # Gzip compression
 app.add_middleware(GZipMiddleware, minimum_size=1000)
 
+# Request ID
+app.add_middleware(RequestIDMiddleware)
+
 # Security headers
 app.add_middleware(SecurityHeadersMiddleware)
 
@@ -109,13 +126,18 @@ async def health_check():
 @app.get("/ready", tags=["health"])
 async def readiness_check():
     """Readiness check for container orchestration"""
-    # TODO: Add actual checks for DB, Redis, etc.
-    return {
-        "status": "ready",
-        "database": "connected",
-        "redis": "connected",
-        "vector_db": "connected"
+    db_ok = await is_db_healthy()
+    redis_ok = await is_redis_healthy()
+    ready = db_ok and redis_ok
+
+    response = {
+        "status": "ready" if ready else "degraded",
+        "database": "connected" if db_ok else "unavailable",
+        "redis": "connected" if redis_ok else "unavailable",
+        "vector_db": "unknown"
     }
+    status_code = status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(status_code=status_code, content=response)
 
 # Include API router
 app.include_router(api_router, prefix="/api/v1")
@@ -132,11 +154,37 @@ async def global_exception_handler(request: Request, exc: Exception):
     
     return JSONResponse(
         status_code=500,
-        content={
-            "error": "Internal server error",
-            "message": str(exc) if settings.DEBUG else "An error occurred",
-            "request_id": getattr(request.state, "request_id", None)
-        }
+        content=error_payload(
+            error="Internal Server Error",
+            message=str(exc) if settings.DEBUG else "An error occurred",
+            request_id=getattr(request.state, "request_id", None),
+        ),
+    )
+
+
+@app.exception_handler(AppError)
+async def app_error_handler(request: Request, exc: AppError):
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_payload(
+            error=exc.error,
+            message=exc.message,
+            request_id=getattr(request.state, "request_id", None),
+            details=exc.details,
+        ),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_error_handler(request: Request, exc: RequestValidationError):
+    return JSONResponse(
+        status_code=422,
+        content=error_payload(
+            error="Validation Error",
+            message="Request validation failed",
+            request_id=getattr(request.state, "request_id", None),
+            details={"errors": exc.errors()},
+        ),
     )
 
 

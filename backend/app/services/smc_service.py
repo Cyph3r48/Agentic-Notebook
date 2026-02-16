@@ -11,13 +11,15 @@ Implements the 5-layer security architecture:
 import hashlib
 import re
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from datetime import timezone
+from typing import Optional, Dict, Any
 from uuid import UUID, uuid4
 from loguru import logger
 
+from sqlalchemy import select
 from app.core.config import settings
-from app.core.database import get_db_session
-from sqlalchemy.ext.asyncio import AsyncSession
+from app.core.database import SessionLocal
+from app.models import AuditEvent, CanonicalStore
 
 
 class SMCService:
@@ -175,42 +177,34 @@ class SMCService:
         """
         content_hash = cls.compute_hash(content)
         
-        async with get_db_session() as session:
-            # Check if already exists
-            from app.models.smc import CanonicalStore
-            
-            existing = await session.execute(
-                f"SELECT * FROM canonical_store WHERE content_hash = '{content_hash}'"
+        async with SessionLocal() as session:
+            existing = await session.scalar(
+                select(CanonicalStore).where(CanonicalStore.content_hash == content_hash)
             )
-            
-            if existing.first():
+
+            if existing is not None:
                 logger.debug(f"Content already in canonical store: {content_hash}")
                 return {
                     "content_hash": content_hash,
                     "version": 1,
-                    "stored_at": datetime.utcnow(),
+                    "stored_at": datetime.now(tz=timezone.utc),
                     "duplicate": True
                 }
             
-            # Insert new canonical entry
-            await session.execute(
-                """
-                INSERT INTO canonical_store (content_type, content, content_hash, metadata)
-                VALUES (:type, :content, :hash, :metadata)
-                """,
-                {
-                    "type": content_type,
-                    "content": content,
-                    "hash": content_hash,
-                    "metadata": metadata or {}
-                }
+            session.add(
+                CanonicalStore(
+                    content_type=content_type,
+                    content=content,
+                    content_hash=content_hash,
+                    metadata_json=metadata or {},
+                )
             )
             await session.commit()
         
         return {
             "content_hash": content_hash,
             "version": 1,
-            "stored_at": datetime.utcnow(),
+            "stored_at": datetime.now(tz=timezone.utc),
             "duplicate": False
         }
     
@@ -288,35 +282,24 @@ class SMCService:
         if not settings.SMC_CIFS_AUDIT_ENABLED:
             return uuid4()
         
-        async with get_db_session() as session:
+        async with SessionLocal() as session:
             request_id = uuid4()
-            
-            await session.execute(
-                """
-                INSERT INTO audit_log (
-                    request_id, user_id, action, resource_type, resource_id,
-                    ip_address, user_agent, request_body, response_status, error_message,
-                    security_layer, created_at
+
+            session.add(
+                AuditEvent(
+                    request_id=request_id,
+                    user_id=user_id,
+                    action=action,
+                    resource_type=resource_type,
+                    resource_id=resource_id,
+                    ip_address=ip_address,
+                    user_agent=user_agent,
+                    request_body=request_body,
+                    response_status=response_status,
+                    error_message=error_message,
+                    security_layer="AUDIT",
+                    flagged=False,
                 )
-                VALUES (
-                    :request_id, :user_id, :action, :resource_type, :resource_id,
-                    :ip_address, :user_agent, :request_body, :response_status, :error_message,
-                    'AUDIT', :created_at
-                )
-                """,
-                {
-                    "request_id": request_id,
-                    "user_id": user_id,
-                    "action": action,
-                    "resource_type": resource_type,
-                    "resource_id": resource_id,
-                    "ip_address": ip_address,
-                    "user_agent": user_agent,
-                    "request_body": request_body,
-                    "response_status": response_status,
-                    "error_message": error_message,
-                    "created_at": datetime.utcnow()
-                }
             )
             await session.commit()
         
@@ -329,29 +312,19 @@ class SMCService:
         action: str,
         details: Dict[str, Any],
         user_id: Optional[UUID] = None
-    ):
+    ) -> None:
         """Internal helper to log security events"""
-        async with get_db_session() as session:
-            await session.execute(
-                """
-                INSERT INTO audit_log (
-                    request_id, user_id, action, security_layer, 
-                    flagged, flag_reason, request_body, created_at
+        async with SessionLocal() as session:
+            session.add(
+                AuditEvent(
+                    request_id=uuid4(),
+                    user_id=user_id,
+                    action=action,
+                    security_layer=layer,
+                    flagged=True,
+                    flag_reason=f"{layer} security check failed",
+                    request_body=details,
                 )
-                VALUES (
-                    :request_id, :user_id, :action, :layer,
-                    true, :reason, :details, :created_at
-                )
-                """,
-                {
-                    "request_id": uuid4(),
-                    "user_id": user_id,
-                    "action": action,
-                    "layer": layer,
-                    "reason": f"{layer} security check failed",
-                    "details": details,
-                    "created_at": datetime.utcnow()
-                }
             )
             await session.commit()
 
