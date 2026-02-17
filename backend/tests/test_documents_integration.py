@@ -167,3 +167,40 @@ def test_documents_get_detail_with_real_db() -> None:
         assert payload["id"] == document_id
         assert payload["original_filename"] == unique_name
         assert payload["chunk_count"] >= 0
+
+
+def test_search_with_real_db() -> None:
+    token = uuid.uuid4().hex
+    unique_text = f"vector-search-term-{token}"
+    unique_name = f"integration-search-{token}.txt"
+    content = f"This document contains {unique_text} for lookup.".encode("utf-8")
+
+    with _client() as client:
+        token = _login(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        upload = client.post(
+            "/api/v1/documents/upload",
+            headers=headers,
+            files={"file": (unique_name, content, "text/plain")},
+        )
+        assert upload.status_code == 201
+        document_id = upload.json()["id"]
+
+        # Wait for background processing so chunks are searchable.
+        for _ in range(24):
+            detail = client.get(f"/api/v1/documents/{document_id}", headers=headers)
+            assert detail.status_code == 200
+            if detail.json()["status"] == "completed":
+                break
+            time.sleep(0.25)
+
+        search = client.post(
+            "/api/v1/search",
+            headers=headers,
+            json={"query": unique_text, "limit": 5},
+        )
+        assert search.status_code == 200
+        payload = search.json()
+        assert payload["query"] == unique_text
+        assert any(item["original_filename"] == unique_name for item in payload["results"])
