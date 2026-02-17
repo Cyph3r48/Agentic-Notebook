@@ -117,3 +117,46 @@ def test_send_message_missing_conversation(monkeypatch):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Conversation not found"
+
+
+def test_get_conversation_endpoint(monkeypatch):
+    fake_row = SimpleNamespace(
+        id=uuid4(),
+        title="Existing Chat",
+        model="llama3.2:3b-instruct-q4_K_M",
+        created_at=datetime.now(tz=timezone.utc),
+        updated_at=datetime.now(tz=timezone.utc),
+    )
+
+    async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
+        return fake_row
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
+
+    with _build_test_client() as client:
+        response = client.get(f"/chat/conversations/{fake_row.id}")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["id"] == str(fake_row.id)
+    assert payload["title"] == "Existing Chat"
+
+
+def test_delete_conversation_endpoint(monkeypatch):
+    fake_row = SimpleNamespace(id=uuid4())
+    deleted = {"value": False}
+
+    async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
+        return fake_row
+
+    async def fake_delete_conversation(self, row):
+        deleted["value"] = True
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
+    monkeypatch.setattr(chat_module.ChatRepository, "delete_conversation", fake_delete_conversation)
+
+    with _build_test_client() as client:
+        response = client.delete(f"/chat/conversations/{fake_row.id}")
+
+    assert response.status_code == 204
+    assert deleted["value"] is True

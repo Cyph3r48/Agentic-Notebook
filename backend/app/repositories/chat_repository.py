@@ -48,6 +48,10 @@ class ChatRepository:
             )
         )
 
+    async def delete_conversation(self, row: Conversation) -> None:
+        await self.session.delete(row)
+        await self.session.commit()
+
     async def create_message(
         self,
         *,

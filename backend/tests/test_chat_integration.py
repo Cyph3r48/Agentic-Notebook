@@ -59,3 +59,23 @@ def test_chat_conversation_and_messages_with_real_db() -> None:
         assert messages.status_code == 200
         rows = messages.json()
         assert len(rows) >= 2
+
+
+def test_chat_delete_conversation_with_real_db() -> None:
+    with _client() as client:
+        token = _login(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        created = client.post(
+            "/api/v1/chat/conversations",
+            headers=headers,
+            json={"title": "Delete Me"},
+        )
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+
+        deleted = client.delete(f"/api/v1/chat/conversations/{conversation_id}", headers=headers)
+        assert deleted.status_code == 204
+
+        detail = client.get(f"/api/v1/chat/conversations/{conversation_id}", headers=headers)
+        assert detail.status_code == 404
