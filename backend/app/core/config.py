@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     DATABASE_URL: str = Field(
         default="postgresql+asyncpg://si_user:change_me@postgres:5432/structured_intelligence"
     )
-    AUTO_CREATE_SCHEMA: bool = Field(default=True)
-    AUTO_RUN_MIGRATIONS: bool = Field(default=True)
+    AUTO_RUN_MIGRATIONS: bool = Field(default=False)
+    FORCE_RUN_MIGRATIONS_IN_PRODUCTION: bool = Field(default=False)
     
     # ============================================
     # VECTOR DATABASE (Qdrant)

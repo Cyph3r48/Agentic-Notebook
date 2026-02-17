@@ -4,12 +4,11 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
-from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.api.deps import db_session
 from app.api.v1.endpoints import auth as auth_module
-from app.api.v1.endpoints.auth import router
+from app.main import app
 
 
 async def _fake_db_session():
@@ -17,8 +16,6 @@ async def _fake_db_session():
 
 
 def _build_client() -> TestClient:
-    app = FastAPI()
-    app.include_router(router)
     app.dependency_overrides[db_session] = _fake_db_session
     return TestClient(app)
 
@@ -63,7 +60,7 @@ def test_login_success(monkeypatch):
 
     with _build_client() as client:
         response = client.post(
-            "/auth/login",
+            "/api/v1/auth/login",
             json={"email": "user@example.com", "password": "password123"},
         )
 
@@ -119,7 +116,7 @@ def test_refresh_success(monkeypatch):
     )
 
     with _build_client() as client:
-        response = client.post("/auth/refresh", json={"refresh_token": "old-refresh"})
+        response = client.post("/api/v1/auth/refresh", json={"refresh_token": "old-refresh"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -141,8 +138,36 @@ def test_logout_success(monkeypatch):
     monkeypatch.setattr(auth_module, "SessionRepository", FakeSessionRepository)
 
     with _build_client() as client:
-        response = client.post("/auth/logout", json={"refresh_token": "bye-token"})
+        response = client.post("/api/v1/auth/logout", json={"refresh_token": "bye-token"})
 
     assert response.status_code == 204
     assert tracker["deleted_token"] == "bye-token"
 
+
+def test_login_invalid_credentials_payload_shape(monkeypatch):
+    class FakeUserRepository:
+        def __init__(self, _session):
+            pass
+
+        async def get_by_email(self, _email):
+            return None
+
+    class FakeSessionRepository:
+        def __init__(self, _session):
+            pass
+
+    monkeypatch.setattr(auth_module, "UserRepository", FakeUserRepository)
+    monkeypatch.setattr(auth_module, "SessionRepository", FakeSessionRepository)
+    monkeypatch.setattr(auth_module, "verify_password", lambda plain, hashed: False)
+
+    with _build_client() as client:
+        response = client.post(
+            "/api/v1/auth/login",
+            json={"email": "user@example.com", "password": "password123"},
+        )
+
+    assert response.status_code == 401
+    payload = response.json()
+    assert payload["error"] == "Unauthorized"
+    assert payload["message"] == "Invalid credentials"
+    assert "request_id" in payload

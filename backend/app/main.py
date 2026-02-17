@@ -3,7 +3,9 @@ Structured Intelligence - Main Application
 Production-grade NotebookLM alternative with SMC integration
 """
 
-from fastapi import FastAPI, Request, status
+from http import HTTPStatus
+
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
@@ -30,9 +32,14 @@ async def lifespan(app: FastAPI):
     logger.info("🚀 Starting Structured Intelligence...")
 
     if settings.AUTO_RUN_MIGRATIONS:
-        logger.info("🧱 Running Alembic migrations...")
-        await run_startup_migrations()
-        logger.info("✅ Alembic migrations complete")
+        if settings.ENVIRONMENT.lower() == "production" and not settings.FORCE_RUN_MIGRATIONS_IN_PRODUCTION:
+            logger.warning(
+                "AUTO_RUN_MIGRATIONS is enabled in production but FORCE_RUN_MIGRATIONS_IN_PRODUCTION=false; skipping."
+            )
+        else:
+            logger.info("🧱 Running Alembic migrations...")
+            await run_startup_migrations()
+            logger.info("✅ Alembic migrations complete")
     
     # Initialize database
     await init_db()
@@ -171,6 +178,36 @@ async def app_error_handler(request: Request, exc: AppError):
             message=exc.message,
             request_id=getattr(request.state, "request_id", None),
             details=exc.details,
+        ),
+    )
+
+
+@app.exception_handler(HTTPException)
+async def http_error_handler(request: Request, exc: HTTPException):
+    details = None
+    message = "Request failed"
+    raw_detail = exc.detail
+
+    if isinstance(raw_detail, str):
+        message = raw_detail
+    elif isinstance(raw_detail, list):
+        details = {"errors": raw_detail}
+    elif isinstance(raw_detail, dict):
+        message = raw_detail.get("message", message)
+        details = raw_detail.get("details", raw_detail)
+
+    try:
+        error_name = HTTPStatus(exc.status_code).phrase
+    except ValueError:
+        error_name = "HTTP Error"
+
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=error_payload(
+            error=error_name,
+            message=message,
+            request_id=getattr(request.state, "request_id", None),
+            details=details,
         ),
     )
 

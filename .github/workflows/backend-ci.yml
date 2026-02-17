@@ -1,0 +1,95 @@
+name: Backend CI
+
+on:
+  push:
+    branches:
+      - master
+      - main
+  pull_request:
+
+jobs:
+  backend-tests-and-migrations:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_DB: structured_intelligence
+          POSTGRES_USER: si_user
+          POSTGRES_PASSWORD: change_me_in_production
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U si_user -d structured_intelligence"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    env:
+      DATABASE_URL: postgresql+asyncpg://si_user:change_me_in_production@localhost:5432/structured_intelligence
+      REDIS_URL: redis://localhost:6379/0
+      REDIS_PASSWORD: ""
+      AUTO_RUN_MIGRATIONS: "true"
+      ADMIN_EMAIL: admin@structuredintelligence.com
+      ADMIN_PASSWORD: change_me_immediately
+      ADMIN_NAME: System Administrator
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+          cache-dependency-path: backend/requirements.txt
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Wait for services
+        run: |
+          python - <<'PY'
+          import socket
+          import time
+
+          def wait(host, port, retries=60):
+              for _ in range(retries):
+                  with socket.socket() as s:
+                      try:
+                          s.connect((host, port))
+                          return
+                      except OSError:
+                          time.sleep(1)
+              raise RuntimeError(f"Service not ready: {host}:{port}")
+
+          wait("127.0.0.1", 5432)
+          wait("127.0.0.1", 6379)
+          PY
+
+      - name: Alembic upgrade head
+        run: alembic upgrade head
+
+      - name: Alembic current revision
+        run: alembic current
+
+      - name: Run tests
+        run: python -m pytest -q tests

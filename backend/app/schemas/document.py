@@ -12,6 +12,7 @@ class DocumentUploadResponse(BaseModel):
     file_size: int
     status: str
     chunk_count: int
+    processing_error: str | None = None
     created_at: datetime
 
 
@@ -22,4 +23,6 @@ class DocumentListItem(BaseModel):
     file_type: str
     file_size: int
     status: str
+    chunk_count: int
+    processing_error: str | None = None
     created_at: datetime
