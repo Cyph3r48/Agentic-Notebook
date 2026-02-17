@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 
+import time
+
 from fastapi.testclient import TestClient
 
 from app.main import app
@@ -79,3 +81,39 @@ def test_chat_delete_conversation_with_real_db() -> None:
 
         detail = client.get(f"/api/v1/chat/conversations/{conversation_id}", headers=headers)
         assert detail.status_code == 404
+
+
+def test_chat_rag_message_returns_sources_with_snippets() -> None:
+    marker = "chat-rag-marker-12345"
+    with _client() as client:
+        token = _login(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        upload = client.post(
+            "/api/v1/documents/upload",
+            headers=headers,
+            files={"file": ("chat-rag.txt", f"This text contains {marker} for retrieval.".encode("utf-8"), "text/plain")},
+        )
+        assert upload.status_code == 201
+        document_id = upload.json()["id"]
+
+        for _ in range(24):
+            detail = client.get(f"/api/v1/documents/{document_id}", headers=headers)
+            assert detail.status_code == 200
+            if detail.json()["status"] == "completed":
+                break
+            time.sleep(0.25)
+
+        created = client.post("/api/v1/chat/conversations", headers=headers, json={"title": "RAG Chat"})
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+
+        sent = client.post(
+            f"/api/v1/chat/conversations/{conversation_id}/messages",
+            headers=headers,
+            json={"content": marker, "use_rag": True},
+        )
+        assert sent.status_code == 200
+        assistant = sent.json()["assistant_message"]
+        assert assistant["sources"]
+        assert "snippet" in assistant["sources"][0]

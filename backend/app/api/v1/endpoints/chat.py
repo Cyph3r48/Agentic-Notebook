@@ -24,6 +24,13 @@ from app.schemas.chat import (
 router = APIRouter(prefix="/chat")
 
 
+def _snippet(text: str, *, limit: int = 220) -> str:
+    compact = " ".join(text.split())
+    if len(compact) <= limit:
+        return compact
+    return compact[: limit - 3].rstrip() + "..."
+
+
 @router.post("/conversations", response_model=ConversationResponse, status_code=status.HTTP_201_CREATED)
 async def create_conversation(
     payload: ConversationCreateRequest,
@@ -161,11 +168,16 @@ async def send_message(
                 "original_filename": row["original_filename"],
                 "chunk_index": row["chunk_index"],
                 "score": row["score"],
+                "snippet": _snippet(row["content"]),
             }
             for row in search_results
         ]
         if sources:
-            assistant_text = "Found relevant context in your documents."
+            bullet_lines = [
+                f"- {source['original_filename']}#{source['chunk_index']}: {source['snippet']}"
+                for source in sources[:3]
+            ]
+            assistant_text = "I found relevant context in your documents:\n" + "\n".join(bullet_lines)
         else:
             assistant_text = "I could not find relevant context in your uploaded documents."
 

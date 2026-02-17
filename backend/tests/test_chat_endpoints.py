@@ -101,6 +101,8 @@ def test_send_message_endpoint(monkeypatch):
     assert payload["user_message"]["role"] == "user"
     assert payload["assistant_message"]["role"] == "assistant"
     assert len(payload["assistant_message"]["sources"]) == 1
+    assert payload["assistant_message"]["sources"][0]["snippet"] == "chunk"
+    assert "doc.txt" in payload["assistant_message"]["content"]
 
 
 def test_send_message_missing_conversation(monkeypatch):
