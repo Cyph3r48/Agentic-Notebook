@@ -34,6 +34,8 @@ class SearchRepository:
                     Document.original_filename.label("original_filename"),
                     DocumentChunk.chunk_index.label("chunk_index"),
                     DocumentChunk.content.label("content"),
+                    DocumentChunk.content_hash.label("content_hash"),
+                    DocumentChunk.metadata_json.label("metadata_json"),
                     similarity.label("score"),
                 )
                 .join(Document, Document.id == DocumentChunk.document_id)
@@ -57,6 +59,9 @@ class SearchRepository:
                 "original_filename": row.original_filename,
                 "chunk_index": row.chunk_index,
                 "content": row.content,
+                "content_hash": row.content_hash,
+                "span_start": (row.metadata_json or {}).get("start"),
+                "span_end": (row.metadata_json or {}).get("end"),
                 "score": float(row.score or 0.0),
             }
             for row in rows

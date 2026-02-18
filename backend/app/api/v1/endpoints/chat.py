@@ -36,6 +36,10 @@ def _snippet(text: str, *, limit: int = 220) -> str:
     return compact[: limit - 3].rstrip() + "..."
 
 
+def _estimate_tokens(text: str) -> int:
+    return max(int(len(text.split()) * 1.3), 1)
+
+
 def _resolve_model(model: str | None) -> str:
     selected = (model or settings.DEFAULT_MODEL).strip()
     if not selected:
@@ -57,6 +61,7 @@ def _as_message_response(message) -> MessageResponse:
         role=message.role,
         content=message.content,
         model=message.model,
+        tokens_used=getattr(message, "tokens_used", None),
         sources=list(message.sources or []),
         metadata=dict(message.metadata_json or {}),
         created_at=message.created_at,
@@ -76,6 +81,7 @@ async def _process_chat_turn(
         role="user",
         content=payload.content,
         model=conversation.model,
+        tokens_used=_estimate_tokens(payload.content),
         metadata={"rag_used": payload.use_rag},
     )
 
@@ -91,13 +97,18 @@ async def _process_chat_turn(
         )
         sources = [
             {
+                "source_id": f"{row['document_id']}:{row['chunk_index']}",
                 "document_id": row["document_id"],
                 "original_filename": row["original_filename"],
                 "chunk_index": row["chunk_index"],
+                "rank": rank,
                 "score": row["score"],
                 "snippet": _snippet(row["content"]),
+                "content_hash": row.get("content_hash"),
+                "span_start": row.get("span_start"),
+                "span_end": row.get("span_end"),
             }
-            for row in search_results
+            for rank, row in enumerate(search_results, start=1)
         ]
         context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
 
@@ -112,6 +123,7 @@ async def _process_chat_turn(
         role="assistant",
         content=assistant_text,
         model=conversation.model,
+        tokens_used=int(llm_metadata.get("token_estimate", _estimate_tokens(assistant_text))),
         sources=sources,
         context_documents=context_documents,
         metadata={
@@ -324,6 +336,7 @@ async def stream_message(
             "assistant_message_id": turn.assistant_message.id,
             "content": turn.assistant_message.content,
             "sources": turn.assistant_message.sources,
+            "metadata": turn.assistant_message.metadata,
         }
         yield f"event: message\ndata: {json.dumps(message_payload)}\n\n"
         yield "event: done\ndata: {}\n\n"

@@ -108,6 +108,8 @@ services:
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-llama3.2:3b-instruct-q4_K_M}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
+      CLAUDE_SONNET_MODEL: ${CLAUDE_SONNET_MODEL:-claude-sonnet-4.6}
+      CLAUDE_OPUS_MODEL: ${CLAUDE_OPUS_MODEL:-claude-opus-4.6}
       
       # Auth
       JWT_SECRET: ${JWT_SECRET:-generate_secure_secret_in_production}

@@ -51,6 +51,17 @@ def test_create_conversation_endpoint(monkeypatch):
     assert payload["title"] == "New Chat"
 
 
+def test_create_conversation_rejects_unknown_claude_model():
+    with _build_test_client() as client:
+        response = client.post(
+            "/chat/conversations",
+            json={"title": "Bad Claude", "model": "claude-unknown-1.0"},
+        )
+
+    assert response.status_code == 400
+    assert "Unsupported Anthropic model" in response.json()["detail"]
+
+
 def test_list_conversations_endpoint_with_pagination(monkeypatch):
     rows = [
         SimpleNamespace(

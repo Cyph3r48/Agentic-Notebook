@@ -73,6 +73,9 @@ class VectorSearchService:
                         "original_filename": str(payload.get("original_filename", "unknown")),
                         "chunk_index": int(payload.get("chunk_index", 0)),
                         "content": str(payload.get("content", "")),
+                        "content_hash": payload.get("content_hash"),
+                        "span_start": payload.get("span_start"),
+                        "span_end": payload.get("span_end"),
                         "score": float(row.score or 0.0),
                     }
                 )

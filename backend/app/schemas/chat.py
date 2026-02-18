@@ -34,6 +34,7 @@ class MessageResponse(BaseModel):
     role: str
     content: str
     model: str | None = None
+    tokens_used: int | None = None
     sources: list[dict[str, Any]] = Field(default_factory=list)
     metadata: dict[str, Any] = Field(default_factory=dict)
     created_at: datetime
