@@ -204,3 +204,12 @@ def test_search_with_real_db() -> None:
         payload = search.json()
         assert payload["query"] == unique_text
         assert any(item["original_filename"] == unique_name for item in payload["results"])
+
+        paged = client.post(
+            "/api/v1/search",
+            headers=headers,
+            json={"query": unique_text, "limit": 1, "offset": 0, "min_score": 0.0},
+        )
+        assert paged.status_code == 200
+        paged_payload = paged.json()
+        assert len(paged_payload["results"]) <= 1

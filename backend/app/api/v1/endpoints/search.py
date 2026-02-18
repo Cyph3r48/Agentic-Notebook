@@ -23,13 +23,26 @@ async def search_documents(
     current_user: User = Depends(get_current_user),
 ) -> SearchResponse:
     repo = SearchRepository(session)
-    items = await repo.search_chunks(user_id=current_user.id, query=payload.query, limit=payload.limit)
+    items = await repo.search_chunks(
+        user_id=current_user.id,
+        query=payload.query,
+        limit=payload.limit,
+        offset=payload.offset,
+        min_score=payload.min_score,
+    )
 
     logger.bind(
         request_id=getattr(request.state, "request_id", None),
         action="search_documents",
         user_id=str(current_user.id),
-    ).info("Search completed query_length={query_length} results={count}", query_length=len(payload.query), count=len(items))
+    ).info(
+        "Search completed query_length={query_length} results={count} limit={limit} offset={offset} min_score={min_score}",
+        query_length=len(payload.query),
+        count=len(items),
+        limit=payload.limit,
+        offset=payload.offset,
+        min_score=payload.min_score,
+    )
 
     return SearchResponse(
         query=payload.query,

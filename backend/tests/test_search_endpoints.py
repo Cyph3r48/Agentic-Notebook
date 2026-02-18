@@ -28,7 +28,11 @@ def _build_test_client() -> TestClient:
 
 
 def test_search_documents_endpoint(monkeypatch):
-    async def fake_search_chunks(self, *, user_id, query, limit):
+    tracker = {"offset": None, "min_score": None}
+
+    async def fake_search_chunks_with_controls(self, *, user_id, query, limit, offset=0, min_score=0.1):
+        tracker["offset"] = offset
+        tracker["min_score"] = min_score
         return [
             {
                 "document_id": str(uuid4()),
@@ -39,16 +43,21 @@ def test_search_documents_endpoint(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(search_module.SearchRepository, "search_chunks", fake_search_chunks)
+    monkeypatch.setattr(search_module.SearchRepository, "search_chunks", fake_search_chunks_with_controls)
 
     with _build_test_client() as client:
-        response = client.post("/search", json={"query": "machine learning", "limit": 5})
+        response = client.post(
+            "/search",
+            json={"query": "machine learning", "limit": 5, "offset": 2, "min_score": 0.25},
+        )
 
     assert response.status_code == 200
     payload = response.json()
     assert payload["query"] == "machine learning"
     assert len(payload["results"]) == 1
     assert payload["results"][0]["original_filename"] == "alpha.txt"
+    assert tracker["offset"] == 2
+    assert tracker["min_score"] == 0.25
 
 
 def test_search_documents_rejects_blank_query():

@@ -14,7 +14,15 @@ class SearchRepository:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    async def search_chunks(self, *, user_id: UUID, query: str, limit: int) -> list[dict]:
+    async def search_chunks(
+        self,
+        *,
+        user_id: UUID,
+        query: str,
+        limit: int,
+        offset: int = 0,
+        min_score: float = 0.1,
+    ) -> list[dict]:
         normalized = query.strip()
         pattern = f"%{normalized}%"
         similarity = func.similarity(DocumentChunk.content, normalized)
@@ -34,10 +42,11 @@ class SearchRepository:
                     Document.status == "completed",
                     or_(
                         DocumentChunk.content.ilike(pattern),
-                        similarity >= 0.1,
+                        similarity >= min_score,
                     ),
                 )
                 .order_by(desc("score"), Document.created_at.desc(), DocumentChunk.chunk_index.asc())
+                .offset(offset)
                 .limit(limit)
             )
         ).all()
