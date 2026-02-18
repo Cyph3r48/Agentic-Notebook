@@ -164,6 +164,45 @@ def test_delete_conversation_endpoint(monkeypatch):
     assert deleted["value"] is True
 
 
+def test_list_messages_endpoint_with_pagination(monkeypatch):
+    conversation = SimpleNamespace(id=uuid4())
+    rows = [
+        SimpleNamespace(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            role="user",
+            content="hello",
+            model="llama3.2:3b-instruct-q4_K_M",
+            sources=[],
+            created_at=datetime.now(tz=timezone.utc),
+        )
+    ]
+    tracker = {"limit": None, "offset": None}
+
+    async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
+        return conversation
+
+    async def fake_list_messages_for_conversation_paginated(self, *, conversation_id, limit, offset):
+        tracker["limit"] = limit
+        tracker["offset"] = offset
+        return rows
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
+    monkeypatch.setattr(
+        chat_module.ChatRepository,
+        "list_messages_for_conversation_paginated",
+        fake_list_messages_for_conversation_paginated,
+    )
+
+    with _build_test_client() as client:
+        response = client.get(f"/chat/conversations/{conversation.id}/messages?limit=1&offset=2")
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert tracker["limit"] == 1
+    assert tracker["offset"] == 2
+
+
 def test_update_conversation_endpoint(monkeypatch):
     fake_row = SimpleNamespace(
         id=uuid4(),

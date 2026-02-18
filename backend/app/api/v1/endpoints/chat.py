@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from loguru import logger
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -256,6 +256,8 @@ async def send_message(
 async def list_messages(
     conversation_id: UUID,
     request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
 ) -> list[MessageResponse]:
@@ -267,13 +269,17 @@ async def list_messages(
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
-    rows = await chat_repo.list_messages_for_conversation(conversation_id=conversation_id)
+    rows = await chat_repo.list_messages_for_conversation_paginated(
+        conversation_id=conversation_id,
+        limit=limit,
+        offset=offset,
+    )
     logger.bind(
         request_id=getattr(request.state, "request_id", None),
         action="chat_list_messages",
         user_id=str(current_user.id),
         conversation_id=str(conversation_id),
-    ).info("Messages listed count={count}", count=len(rows))
+    ).info("Messages listed count={count} limit={limit} offset={offset}", count=len(rows), limit=limit, offset=offset)
     return [
         MessageResponse(
             id=str(row.id),

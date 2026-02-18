@@ -87,3 +87,20 @@ class ChatRepository:
                 select(Message).where(Message.conversation_id == conversation_id).order_by(Message.created_at.asc())
             )
         ).all()
+
+    async def list_messages_for_conversation_paginated(
+        self,
+        *,
+        conversation_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> Sequence[Message]:
+        return (
+            await self.session.scalars(
+                select(Message)
+                .where(Message.conversation_id == conversation_id)
+                .order_by(Message.created_at.asc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).all()

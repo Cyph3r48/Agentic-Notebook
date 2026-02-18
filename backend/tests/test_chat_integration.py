@@ -139,3 +139,40 @@ def test_chat_update_conversation_title_with_real_db() -> None:
         )
         assert updated.status_code == 200
         assert updated.json()["title"] == "Renamed"
+
+
+def test_chat_list_messages_supports_pagination_with_real_db() -> None:
+    with _client() as client:
+        token = _login(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        created = client.post(
+            "/api/v1/chat/conversations",
+            headers=headers,
+            json={"title": "Paging"},
+        )
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+
+        first = client.post(
+            f"/api/v1/chat/conversations/{conversation_id}/messages",
+            headers=headers,
+            json={"content": "first", "use_rag": False},
+        )
+        assert first.status_code == 200
+        second = client.post(
+            f"/api/v1/chat/conversations/{conversation_id}/messages",
+            headers=headers,
+            json={"content": "second", "use_rag": False},
+        )
+        assert second.status_code == 200
+
+        paged = client.get(
+            f"/api/v1/chat/conversations/{conversation_id}/messages?limit=2&offset=2",
+            headers=headers,
+        )
+        assert paged.status_code == 200
+        rows = paged.json()
+        assert len(rows) == 2
+        assert rows[0]["role"] == "user"
+        assert rows[0]["content"] == "second"
