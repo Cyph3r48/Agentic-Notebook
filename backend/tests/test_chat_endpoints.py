@@ -103,12 +103,13 @@ def test_send_message_endpoint(monkeypatch):
             content=kwargs["content"],
             model=kwargs.get("model"),
             sources=kwargs.get("sources", []),
+            metadata_json=kwargs.get("metadata", {}),
             created_at=datetime.now(tz=timezone.utc),
         )
         created_rows.append(row)
         return row
 
-    async def fake_search_chunks(self, *, user_id, query, limit):
+    async def fake_vector_search(self, *, user_id, query, limit, offset=0, min_score=0.1):
         return [
             {
                 "document_id": str(uuid4()),
@@ -119,9 +120,13 @@ def test_send_message_endpoint(monkeypatch):
             }
         ]
 
+    async def fake_llm_reply(self, *, model, user_message, context_lines):
+        return "assistant-response", {"provider": "ollama", "model": model}
+
     monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
     monkeypatch.setattr(chat_module.ChatRepository, "create_message", fake_create_message)
-    monkeypatch.setattr(chat_module.SearchRepository, "search_chunks", fake_search_chunks)
+    monkeypatch.setattr(chat_module.VectorSearchService, "search", fake_vector_search)
+    monkeypatch.setattr(chat_module.LLMService, "generate_chat_reply", classmethod(fake_llm_reply))
 
     with _build_test_client() as client:
         response = client.post(
@@ -136,7 +141,8 @@ def test_send_message_endpoint(monkeypatch):
     assert payload["assistant_message"]["role"] == "assistant"
     assert len(payload["assistant_message"]["sources"]) == 1
     assert payload["assistant_message"]["sources"][0]["snippet"] == "chunk"
-    assert "doc.txt" in payload["assistant_message"]["content"]
+    assert payload["assistant_message"]["content"] == "assistant-response"
+    assert payload["assistant_message"]["metadata"]["provider"] == "ollama"
 
 
 def test_send_message_missing_conversation(monkeypatch):
@@ -153,6 +159,52 @@ def test_send_message_missing_conversation(monkeypatch):
 
     assert response.status_code == 404
     assert response.json()["detail"] == "Conversation not found"
+
+
+def test_stream_message_endpoint(monkeypatch):
+    conversation = SimpleNamespace(id=uuid4(), model="llama3.2:3b-instruct-q4_K_M")
+
+    async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
+        return conversation
+
+    async def fake_process_chat_turn(**kwargs):
+        message_id = str(uuid4())
+        return chat_module.ChatTurnResponse(
+            conversation_id=str(conversation.id),
+            user_message=chat_module.MessageResponse(
+                id=str(uuid4()),
+                conversation_id=str(conversation.id),
+                role="user",
+                content="hello",
+                model=conversation.model,
+                sources=[],
+                metadata={},
+                created_at=datetime.now(tz=timezone.utc),
+            ),
+            assistant_message=chat_module.MessageResponse(
+                id=message_id,
+                conversation_id=str(conversation.id),
+                role="assistant",
+                content="stream reply",
+                model=conversation.model,
+                sources=[],
+                metadata={},
+                created_at=datetime.now(tz=timezone.utc),
+            ),
+        )
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
+    monkeypatch.setattr(chat_module, "_process_chat_turn", fake_process_chat_turn)
+
+    with _build_test_client() as client:
+        response = client.post(
+            f"/chat/conversations/{conversation.id}/messages/stream",
+            json={"content": "hello", "use_rag": False},
+        )
+
+    assert response.status_code == 200
+    assert "event: message" in response.text
+    assert "event: done" in response.text
 
 
 def test_get_conversation_endpoint(monkeypatch):
@@ -208,6 +260,7 @@ def test_list_messages_endpoint_with_pagination(monkeypatch):
             content="hello",
             model="llama3.2:3b-instruct-q4_K_M",
             sources=[],
+            metadata_json={},
             created_at=datetime.now(tz=timezone.utc),
         )
     ]

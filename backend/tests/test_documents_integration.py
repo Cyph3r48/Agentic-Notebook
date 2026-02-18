@@ -213,3 +213,9 @@ def test_search_with_real_db() -> None:
         assert paged.status_code == 200
         paged_payload = paged.json()
         assert len(paged_payload["results"]) <= 1
+
+
+def test_search_requires_auth_with_real_db() -> None:
+    with _client() as client:
+        response = client.post("/api/v1/search", json={"query": "x", "limit": 1})
+        assert response.status_code == 401

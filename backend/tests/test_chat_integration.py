@@ -63,6 +63,12 @@ def test_chat_conversation_and_messages_with_real_db() -> None:
         assert len(rows) >= 2
 
 
+def test_chat_requires_auth_with_real_db() -> None:
+    with _client() as client:
+        response = client.get("/api/v1/chat/conversations")
+        assert response.status_code == 401
+
+
 def test_chat_delete_conversation_with_real_db() -> None:
     with _client() as client:
         token = _login(client)

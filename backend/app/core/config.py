@@ -3,10 +3,11 @@ Application Configuration
 Pydantic settings with environment variable support
 """
 
-from pydantic_settings import BaseSettings
-from pydantic import Field, validator
-from typing import List
 import secrets
+from typing import List
+
+from pydantic import Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -58,7 +59,9 @@ class Settings(BaseSettings):
     
     # Claude API (Optional)
     CLAUDE_API_KEY: str = Field(default="")
-    CLAUDE_MODEL: str = Field(default="claude-sonnet-4-20250514")
+    CLAUDE_MODEL: str = Field(default="claude-sonnet-4.6")
+    CLAUDE_SONNET_MODEL: str = Field(default="claude-sonnet-4.6")
+    CLAUDE_OPUS_MODEL: str = Field(default="claude-opus-4.6")
     
     # ============================================
     # AUTHENTICATION
@@ -94,7 +97,8 @@ class Settings(BaseSettings):
         default=["http://localhost:3000", "http://localhost:5173"]
     )
     
-    @validator("CORS_ORIGINS", pre=True)
+    @field_validator("CORS_ORIGINS", mode="before")
+    @classmethod
     def parse_cors_origins(cls, v):
         if isinstance(v, str):
             return [origin.strip() for origin in v.split(",")]
@@ -111,7 +115,8 @@ class Settings(BaseSettings):
     CHUNK_OVERLAP: int = Field(default=200)
     UPLOAD_DIR: str = Field(default="/app/uploads")
     
-    @validator("ALLOWED_EXTENSIONS", pre=True)
+    @field_validator("ALLOWED_EXTENSIONS", mode="before")
+    @classmethod
     def parse_extensions(cls, v):
         if isinstance(v, str):
             return [ext.strip() for ext in v.split(",")]
@@ -129,10 +134,11 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = Field(default="INFO")
     LOG_FILE: str = Field(default="/app/logs/si.log")
     
-    class Config:
-        env_file = ".env"
-        env_file_encoding = "utf-8"
-        case_sensitive = True
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
 
 
 # Create settings instance

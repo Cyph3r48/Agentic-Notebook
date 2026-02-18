@@ -83,6 +83,7 @@ class ChatRepository:
         model: str | None = None,
         sources: list[dict] | None = None,
         context_documents: list[UUID] | None = None,
+        metadata: dict | None = None,
     ) -> Message:
         row = Message(
             conversation_id=conversation_id,
@@ -91,7 +92,7 @@ class ChatRepository:
             model=model,
             sources=sources or [],
             context_documents=context_documents,
-            metadata_json={},
+            metadata_json=metadata or {},
         )
         self.session.add(row)
         await self.session.commit()

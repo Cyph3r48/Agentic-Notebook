@@ -30,7 +30,7 @@ def _build_test_client() -> TestClient:
 def test_search_documents_endpoint(monkeypatch):
     tracker = {"offset": None, "min_score": None}
 
-    async def fake_search_chunks_with_controls(self, *, user_id, query, limit, offset=0, min_score=0.1):
+    async def fake_vector_search(self, *, user_id, query, limit, offset=0, min_score=0.1):
         tracker["offset"] = offset
         tracker["min_score"] = min_score
         return [
@@ -43,7 +43,7 @@ def test_search_documents_endpoint(monkeypatch):
             }
         ]
 
-    monkeypatch.setattr(search_module.SearchRepository, "search_chunks", fake_search_chunks_with_controls)
+    monkeypatch.setattr(search_module.VectorSearchService, "search", fake_vector_search)
 
     with _build_test_client() as client:
         response = client.post(
