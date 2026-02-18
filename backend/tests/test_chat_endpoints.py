@@ -51,6 +51,40 @@ def test_create_conversation_endpoint(monkeypatch):
     assert payload["title"] == "New Chat"
 
 
+def test_list_conversations_endpoint_with_pagination(monkeypatch):
+    rows = [
+        SimpleNamespace(
+            id=uuid4(),
+            title="Paged",
+            model="llama3.2:3b-instruct-q4_K_M",
+            created_at=datetime.now(tz=timezone.utc),
+            updated_at=datetime.now(tz=timezone.utc),
+        )
+    ]
+    tracker = {"limit": None, "offset": None}
+
+    async def fake_list_conversations_for_user_paginated(self, *, user_id, limit, offset):
+        tracker["limit"] = limit
+        tracker["offset"] = offset
+        return rows
+
+    monkeypatch.setattr(
+        chat_module.ChatRepository,
+        "list_conversations_for_user_paginated",
+        fake_list_conversations_for_user_paginated,
+    )
+
+    with _build_test_client() as client:
+        response = client.get("/chat/conversations?limit=1&offset=2")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert len(payload) == 1
+    assert payload[0]["title"] == "Paged"
+    assert tracker["limit"] == 1
+    assert tracker["offset"] == 2
+
+
 def test_send_message_endpoint(monkeypatch):
     conversation = SimpleNamespace(
         id=uuid4(),

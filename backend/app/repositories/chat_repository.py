@@ -40,6 +40,23 @@ class ChatRepository:
             )
         ).all()
 
+    async def list_conversations_for_user_paginated(
+        self,
+        *,
+        user_id: UUID,
+        limit: int,
+        offset: int,
+    ) -> Sequence[Conversation]:
+        return (
+            await self.session.scalars(
+                select(Conversation)
+                .where(Conversation.user_id == user_id)
+                .order_by(Conversation.updated_at.desc())
+                .offset(offset)
+                .limit(limit)
+            )
+        ).all()
+
     async def get_conversation_for_user(self, *, conversation_id: UUID, user_id: UUID) -> Conversation | None:
         return await self.session.scalar(
             select(Conversation).where(

@@ -63,15 +63,21 @@ async def create_conversation(
 @router.get("/conversations", response_model=list[ConversationResponse])
 async def list_conversations(
     request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    offset: int = Query(default=0, ge=0),
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
 ) -> list[ConversationResponse]:
-    rows = await ChatRepository(session).list_conversations_for_user(current_user.id)
+    rows = await ChatRepository(session).list_conversations_for_user_paginated(
+        user_id=current_user.id,
+        limit=limit,
+        offset=offset,
+    )
     logger.bind(
         request_id=getattr(request.state, "request_id", None),
         action="chat_list_conversations",
         user_id=str(current_user.id),
-    ).info("Conversations listed count={count}", count=len(rows))
+    ).info("Conversations listed count={count} limit={limit} offset={offset}", count=len(rows), limit=limit, offset=offset)
     return [
         ConversationResponse(
             id=str(row.id),

@@ -176,3 +176,19 @@ def test_chat_list_messages_supports_pagination_with_real_db() -> None:
         assert len(rows) == 2
         assert rows[0]["role"] == "user"
         assert rows[0]["content"] == "second"
+
+
+def test_chat_list_conversations_supports_pagination_with_real_db() -> None:
+    with _client() as client:
+        token = _login(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        first = client.post("/api/v1/chat/conversations", headers=headers, json={"title": "Conv A"})
+        assert first.status_code == 201
+        second = client.post("/api/v1/chat/conversations", headers=headers, json={"title": "Conv B"})
+        assert second.status_code == 201
+
+        paged = client.get("/api/v1/chat/conversations?limit=1&offset=1", headers=headers)
+        assert paged.status_code == 200
+        rows = paged.json()
+        assert len(rows) == 1
