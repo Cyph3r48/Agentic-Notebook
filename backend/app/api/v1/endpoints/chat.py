@@ -173,6 +173,8 @@ async def list_conversations(
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    model: str | None = Query(default=None),
+    sort: str = Query(default="desc", pattern="^(asc|desc)$"),
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
 ) -> list[ConversationResponse]:
@@ -180,12 +182,21 @@ async def list_conversations(
         user_id=current_user.id,
         limit=limit,
         offset=offset,
+        model=model,
+        sort=sort,
     )
     logger.bind(
         request_id=getattr(request.state, "request_id", None),
         action="chat_list_conversations",
         user_id=str(current_user.id),
-    ).info("Conversations listed count={count} limit={limit} offset={offset}", count=len(rows), limit=limit, offset=offset)
+    ).info(
+        "Conversations listed count={count} limit={limit} offset={offset} model={model} sort={sort}",
+        count=len(rows),
+        limit=limit,
+        offset=offset,
+        model=model,
+        sort=sort,
+    )
     return [
         ConversationResponse(
             id=str(row.id),
@@ -322,21 +333,78 @@ async def stream_message(
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
-    turn = await _process_chat_turn(
-        chat_repo=chat_repo,
-        current_user=current_user,
-        conversation=conversation,
-        payload=payload,
-        session=session,
-    )
-
     async def _events():
+        user_message = await chat_repo.create_message(
+            conversation_id=conversation.id,
+            role="user",
+            content=payload.content,
+            model=conversation.model,
+            tokens_used=_estimate_tokens(payload.content),
+            metadata={"rag_used": payload.use_rag},
+        )
+        sources: list[dict] = []
+        context_lines: list[str] = []
+        if payload.use_rag:
+            search_results = await VectorSearchService(session).search(
+                user_id=current_user.id,
+                query=payload.content,
+                limit=3,
+                offset=0,
+                min_score=0.1,
+            )
+            sources = [
+                {
+                    "source_id": f"{row['document_id']}:{row['chunk_index']}",
+                    "document_id": row["document_id"],
+                    "original_filename": row["original_filename"],
+                    "chunk_index": row["chunk_index"],
+                    "rank": rank,
+                    "score": row["score"],
+                    "snippet": _snippet(row["content"]),
+                    "content_hash": row.get("content_hash"),
+                    "span_start": row.get("span_start"),
+                    "span_end": row.get("span_end"),
+                }
+                for rank, row in enumerate(search_results, start=1)
+            ]
+            context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
+
+        accumulated = ""
+        async for delta in LLMService.stream_chat_reply(
+            model=conversation.model,
+            user_message=payload.content,
+            context_lines=context_lines,
+        ):
+            accumulated += delta
+            yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+
+        if not accumulated:
+            accumulated = "I could not generate a response."
+        context_documents = list({UUID(source["document_id"]) for source in sources}) if sources else None
+        assistant_metadata = {
+            "provider": "anthropic" if LLMService.is_anthropic_model(conversation.model) else "ollama",
+            "model": conversation.model,
+            "rag_used": payload.use_rag,
+            "source_count": len(sources),
+            "token_estimate": _estimate_tokens(accumulated),
+            "total_tokens": _estimate_tokens(accumulated),
+        }
+        assistant_message = await chat_repo.create_message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=accumulated,
+            model=conversation.model,
+            tokens_used=int(assistant_metadata["total_tokens"]),
+            sources=sources,
+            context_documents=context_documents,
+            metadata=assistant_metadata,
+        )
         message_payload = {
-            "conversation_id": turn.conversation_id,
-            "assistant_message_id": turn.assistant_message.id,
-            "content": turn.assistant_message.content,
-            "sources": turn.assistant_message.sources,
-            "metadata": turn.assistant_message.metadata,
+            "conversation_id": str(conversation.id),
+            "user_message_id": str(user_message.id),
+            "assistant_message_id": str(assistant_message.id),
+            "sources": sources,
+            "metadata": assistant_metadata,
         }
         yield f"event: message\ndata: {json.dumps(message_payload)}\n\n"
         yield "event: done\ndata: {}\n\n"
@@ -356,6 +424,9 @@ async def list_messages(
     request: Request,
     limit: int = Query(default=50, ge=1, le=200),
     offset: int = Query(default=0, ge=0),
+    role: str | None = Query(default=None, pattern="^(user|assistant|system)$"),
+    has_sources: bool | None = Query(default=None),
+    sort: str = Query(default="asc", pattern="^(asc|desc)$"),
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
 ) -> list[MessageResponse]:
@@ -371,14 +442,35 @@ async def list_messages(
         conversation_id=conversation_id,
         limit=limit,
         offset=offset,
+        role=role,
+        has_sources=has_sources,
+        sort=sort,
     )
     logger.bind(
         request_id=getattr(request.state, "request_id", None),
         action="chat_list_messages",
         user_id=str(current_user.id),
         conversation_id=str(conversation_id),
-    ).info("Messages listed count={count} limit={limit} offset={offset}", count=len(rows), limit=limit, offset=offset)
+    ).info(
+        "Messages listed count={count} limit={limit} offset={offset} role={role} has_sources={has_sources} sort={sort}",
+        count=len(rows),
+        limit=limit,
+        offset=offset,
+        role=role,
+        has_sources=has_sources,
+        sort=sort,
+    )
     return [
         _as_message_response(row)
         for row in rows
     ]
+
+
+@router.get("/models")
+async def list_chat_models() -> dict:
+    return await LLMService.list_models()
+
+
+@router.get("/providers/health")
+async def provider_health() -> dict:
+    return await LLMService.provider_health()

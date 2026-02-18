@@ -42,6 +42,7 @@ class Settings(BaseSettings):
     # ============================================
     EMBEDDING_URL: str = Field(default="http://tei:80")
     EMBEDDING_MODEL: str = Field(default="BAAI/bge-large-en-v1.5")
+    VECTOR_INDEXING_ENABLED: bool = Field(default=False)
     
     # ============================================
     # REDIS

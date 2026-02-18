@@ -19,6 +19,7 @@ from app.core.config import settings
 from app.models import Document
 from app.repositories import DocumentRepository
 from app.services.smc_service import SMCService
+from app.services.vector_search_service import VectorSearchService
 
 
 class DocumentService:
@@ -142,6 +143,16 @@ class DocumentService:
             sanitized = await SMCService.sanitize_content(extracted, content_type=content_type)
             content_hash = SMCService.compute_hash(sanitized)
             chunks = self._chunk_text(sanitized)
+            vector_service = VectorSearchService(self.session)
+            await vector_service.delete_document_points(user_id=doc.user_id, document_id=doc.id)
+            id_map = await vector_service.index_document_chunks(
+                user_id=doc.user_id,
+                document_id=doc.id,
+                original_filename=doc.original_filename,
+                chunks=chunks,
+            )
+            for chunk in chunks:
+                chunk["vector_id"] = id_map.get(int(chunk["chunk_index"]))
             await self.repo.clear_chunks(doc.id)
             if chunks:
                 await self.repo.add_chunks(document_id=doc.id, chunks=chunks)
@@ -167,6 +178,7 @@ class DocumentService:
         if doc is None:
             return False
 
+        await VectorSearchService(self.session).delete_document_points(user_id=doc.user_id, document_id=doc.id)
         await self.repo.delete_document(doc)
         try:
             Path(doc.storage_path).unlink(missing_ok=True)

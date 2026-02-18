@@ -72,11 +72,13 @@ def test_list_conversations_endpoint_with_pagination(monkeypatch):
             updated_at=datetime.now(tz=timezone.utc),
         )
     ]
-    tracker = {"limit": None, "offset": None}
+    tracker = {"limit": None, "offset": None, "model": None, "sort": None}
 
-    async def fake_list_conversations_for_user_paginated(self, *, user_id, limit, offset):
+    async def fake_list_conversations_for_user_paginated(self, *, user_id, limit, offset, model=None, sort="desc"):
         tracker["limit"] = limit
         tracker["offset"] = offset
+        tracker["model"] = model
+        tracker["sort"] = sort
         return rows
 
     monkeypatch.setattr(
@@ -94,6 +96,8 @@ def test_list_conversations_endpoint_with_pagination(monkeypatch):
     assert payload[0]["title"] == "Paged"
     assert tracker["limit"] == 1
     assert tracker["offset"] == 2
+    assert tracker["model"] is None
+    assert tracker["sort"] == "desc"
 
 
 def test_send_message_endpoint(monkeypatch):
@@ -174,38 +178,33 @@ def test_send_message_missing_conversation(monkeypatch):
 
 def test_stream_message_endpoint(monkeypatch):
     conversation = SimpleNamespace(id=uuid4(), model="llama3.2:3b-instruct-q4_K_M")
+    created_rows = []
 
     async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
         return conversation
 
-    async def fake_process_chat_turn(**kwargs):
-        message_id = str(uuid4())
-        return chat_module.ChatTurnResponse(
-            conversation_id=str(conversation.id),
-            user_message=chat_module.MessageResponse(
-                id=str(uuid4()),
-                conversation_id=str(conversation.id),
-                role="user",
-                content="hello",
-                model=conversation.model,
-                sources=[],
-                metadata={},
-                created_at=datetime.now(tz=timezone.utc),
-            ),
-            assistant_message=chat_module.MessageResponse(
-                id=message_id,
-                conversation_id=str(conversation.id),
-                role="assistant",
-                content="stream reply",
-                model=conversation.model,
-                sources=[],
-                metadata={},
-                created_at=datetime.now(tz=timezone.utc),
-            ),
+    async def fake_create_message(self, **kwargs):
+        row = SimpleNamespace(
+            id=uuid4(),
+            conversation_id=kwargs["conversation_id"],
+            role=kwargs["role"],
+            content=kwargs["content"],
+            model=kwargs.get("model"),
+            tokens_used=kwargs.get("tokens_used"),
+            sources=kwargs.get("sources", []),
+            metadata_json=kwargs.get("metadata", {}),
+            created_at=datetime.now(tz=timezone.utc),
         )
+        created_rows.append(row)
+        return row
+
+    async def fake_stream_chat_reply(cls, *, model, user_message, context_lines):
+        yield "stream "
+        yield "reply"
 
     monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
-    monkeypatch.setattr(chat_module, "_process_chat_turn", fake_process_chat_turn)
+    monkeypatch.setattr(chat_module.ChatRepository, "create_message", fake_create_message)
+    monkeypatch.setattr(chat_module.LLMService, "stream_chat_reply", classmethod(fake_stream_chat_reply))
 
     with _build_test_client() as client:
         response = client.post(
@@ -214,8 +213,11 @@ def test_stream_message_endpoint(monkeypatch):
         )
 
     assert response.status_code == 200
+    assert "event: delta" in response.text
     assert "event: message" in response.text
     assert "event: done" in response.text
+    assert len(created_rows) == 2
+    assert created_rows[1].content == "stream reply"
 
 
 def test_get_conversation_endpoint(monkeypatch):
@@ -275,14 +277,26 @@ def test_list_messages_endpoint_with_pagination(monkeypatch):
             created_at=datetime.now(tz=timezone.utc),
         )
     ]
-    tracker = {"limit": None, "offset": None}
+    tracker = {"limit": None, "offset": None, "role": None, "has_sources": None, "sort": None}
 
     async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
         return conversation
 
-    async def fake_list_messages_for_conversation_paginated(self, *, conversation_id, limit, offset):
+    async def fake_list_messages_for_conversation_paginated(
+        self,
+        *,
+        conversation_id,
+        limit,
+        offset,
+        role=None,
+        has_sources=None,
+        sort="asc",
+    ):
         tracker["limit"] = limit
         tracker["offset"] = offset
+        tracker["role"] = role
+        tracker["has_sources"] = has_sources
+        tracker["sort"] = sort
         return rows
 
     monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
@@ -299,6 +313,9 @@ def test_list_messages_endpoint_with_pagination(monkeypatch):
     assert len(response.json()) == 1
     assert tracker["limit"] == 1
     assert tracker["offset"] == 2
+    assert tracker["role"] is None
+    assert tracker["has_sources"] is None
+    assert tracker["sort"] == "asc"
 
 
 def test_update_conversation_endpoint(monkeypatch):

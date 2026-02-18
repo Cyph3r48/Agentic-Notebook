@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import asc, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models import Conversation, Message
@@ -46,12 +46,16 @@ class ChatRepository:
         user_id: UUID,
         limit: int,
         offset: int,
+        model: str | None = None,
+        sort: str = "desc",
     ) -> Sequence[Conversation]:
+        order = desc(Conversation.updated_at) if sort == "desc" else asc(Conversation.updated_at)
+        query = select(Conversation).where(Conversation.user_id == user_id)
+        if model:
+            query = query.where(Conversation.model == model)
         return (
             await self.session.scalars(
-                select(Conversation)
-                .where(Conversation.user_id == user_id)
-                .order_by(Conversation.updated_at.desc())
+                query.order_by(order)
                 .offset(offset)
                 .limit(limit)
             )
@@ -114,12 +118,21 @@ class ChatRepository:
         conversation_id: UUID,
         limit: int,
         offset: int,
+        role: str | None = None,
+        has_sources: bool | None = None,
+        sort: str = "asc",
     ) -> Sequence[Message]:
+        order = asc(Message.created_at) if sort == "asc" else desc(Message.created_at)
+        query = select(Message).where(Message.conversation_id == conversation_id)
+        if role:
+            query = query.where(Message.role == role)
+        if has_sources is True:
+            query = query.where(func.jsonb_array_length(Message.sources) > 0)
+        if has_sources is False:
+            query = query.where(func.jsonb_array_length(Message.sources) == 0)
         return (
             await self.session.scalars(
-                select(Message)
-                .where(Message.conversation_id == conversation_id)
-                .order_by(Message.created_at.asc())
+                query.order_by(order)
                 .offset(offset)
                 .limit(limit)
             )

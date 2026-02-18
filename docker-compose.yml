@@ -100,6 +100,7 @@ services:
       EMBEDDING_URL: http://tei:80
       EMBEDDING_MODEL: BAAI/bge-large-en-v1.5
       EMBEDDING_DIM: 1024
+      VECTOR_INDEXING_ENABLED: ${VECTOR_INDEXING_ENABLED:-false}
       
       # Redis
       REDIS_URL: redis://:${REDIS_PASSWORD:-change_me_too}@redis:6379/0
