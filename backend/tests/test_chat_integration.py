@@ -117,3 +117,25 @@ def test_chat_rag_message_returns_sources_with_snippets() -> None:
         assistant = sent.json()["assistant_message"]
         assert assistant["sources"]
         assert "snippet" in assistant["sources"][0]
+
+
+def test_chat_update_conversation_title_with_real_db() -> None:
+    with _client() as client:
+        token = _login(client)
+        headers = {"Authorization": f"Bearer {token}"}
+
+        created = client.post(
+            "/api/v1/chat/conversations",
+            headers=headers,
+            json={"title": "Original"},
+        )
+        assert created.status_code == 201
+        conversation_id = created.json()["id"]
+
+        updated = client.patch(
+            f"/api/v1/chat/conversations/{conversation_id}",
+            headers=headers,
+            json={"title": "Renamed"},
+        )
+        assert updated.status_code == 200
+        assert updated.json()["title"] == "Renamed"

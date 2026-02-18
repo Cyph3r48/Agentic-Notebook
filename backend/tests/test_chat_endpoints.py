@@ -162,3 +162,29 @@ def test_delete_conversation_endpoint(monkeypatch):
 
     assert response.status_code == 204
     assert deleted["value"] is True
+
+
+def test_update_conversation_endpoint(monkeypatch):
+    fake_row = SimpleNamespace(
+        id=uuid4(),
+        title="Old",
+        model="llama3.2:3b-instruct-q4_K_M",
+        created_at=datetime.now(tz=timezone.utc),
+        updated_at=datetime.now(tz=timezone.utc),
+    )
+
+    async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
+        return fake_row
+
+    async def fake_update_conversation_title(self, row, *, title):
+        row.title = title
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
+    monkeypatch.setattr(chat_module.ChatRepository, "update_conversation_title", fake_update_conversation_title)
+
+    with _build_test_client() as client:
+        response = client.patch(f"/chat/conversations/{fake_row.id}", json={"title": "Renamed"})
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["title"] == "Renamed"

@@ -52,6 +52,11 @@ class ChatRepository:
         await self.session.delete(row)
         await self.session.commit()
 
+    async def update_conversation_title(self, row: Conversation, *, title: str | None) -> None:
+        row.title = title
+        await self.session.commit()
+        await self.session.refresh(row)
+
     async def create_message(
         self,
         *,

@@ -16,6 +16,7 @@ from app.schemas.chat import (
     ChatTurnResponse,
     ConversationCreateRequest,
     ConversationResponse,
+    ConversationUpdateRequest,
     MessageCreateRequest,
     MessageResponse,
 )
@@ -129,6 +130,34 @@ async def delete_conversation(
         conversation_id=str(conversation_id),
     ).info("Conversation deleted")
     return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.patch("/conversations/{conversation_id}", response_model=ConversationResponse)
+async def update_conversation(
+    conversation_id: UUID,
+    payload: ConversationUpdateRequest,
+    request: Request,
+    session: AsyncSession = Depends(db_session),
+    current_user: User = Depends(get_current_user),
+) -> ConversationResponse:
+    chat_repo = ChatRepository(session)
+    row = await chat_repo.get_conversation_for_user(conversation_id=conversation_id, user_id=current_user.id)
+    if row is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
+    await chat_repo.update_conversation_title(row, title=payload.title)
+    logger.bind(
+        request_id=getattr(request.state, "request_id", None),
+        action="chat_update_conversation",
+        user_id=str(current_user.id),
+        conversation_id=str(conversation_id),
+    ).info("Conversation updated")
+    return ConversationResponse(
+        id=str(row.id),
+        title=row.title,
+        model=row.model,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=ChatTurnResponse)

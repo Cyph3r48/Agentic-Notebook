@@ -11,6 +11,10 @@ class ConversationCreateRequest(BaseModel):
     model: str | None = Field(default=None, max_length=100)
 
 
+class ConversationUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, max_length=500)
+
+
 class ConversationResponse(BaseModel):
     id: str
     title: str | None = None
