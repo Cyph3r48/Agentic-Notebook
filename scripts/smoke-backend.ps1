@@ -1,7 +1,8 @@
 param(
     [string]$BaseUrl = "http://localhost:8000",
     [string]$Email = "admin@structuredintelligence.com",
-    [string]$Password = "change_me_immediately"
+    [string]$Password = "change_me_immediately",
+    [switch]$RequireFullStreamSequence
 )
 
 $ErrorActionPreference = "Stop"
@@ -111,6 +112,9 @@ $providerHealthJson = $providerHealth.Body | ConvertFrom-Json
 if ($null -eq $providerHealthJson.ollama -or $null -eq $providerHealthJson.anthropic) {
     throw "/api/v1/chat/providers/health response missing provider keys"
 }
+$ollamaHealthy = [bool]$providerHealthJson.ollama.healthy
+$ollamaModelCount = @($modelsJson.ollama).Count
+$expectFullStreamSequence = $ollamaHealthy -and $ollamaModelCount -gt 0
 
 Write-Host "Creating chat conversation (/api/v1/chat/conversations)..."
 $conversationBody = @{
@@ -130,8 +134,40 @@ $streamBody = @{
 } | ConvertTo-Json
 $stream = Invoke-CurlJsonOrText -Method "POST" -Url "$BaseUrl/api/v1/chat/conversations/$($conversationJson.id)/messages/stream" -Headers $authHeaders -JsonBody $streamBody -AllowedCurlExitCodes @(0, 18)
 Assert-Status -Actual $stream.StatusCode -Allowed @(200) -Step "/api/v1/chat/conversations/{id}/messages/stream"
-if ($stream.Body -notmatch "event:") {
-    throw "Stream response missing SSE events"
+$hasProviderStreamError = $stream.Body -match '"error_type"\s*:\s*"provider_stream_error"'
+if ($RequireFullStreamSequence) {
+    if ($stream.Body -notmatch "event: delta") {
+        throw "Stream response missing delta event in strict mode"
+    }
+    if ($stream.Body -notmatch "event: message") {
+        throw "Stream response missing message event in strict mode"
+    }
+    if ($stream.Body -notmatch "event: done") {
+        throw "Stream response missing done event in strict mode"
+    }
+    if ($hasProviderStreamError) {
+        throw "Stream returned provider_stream_error in strict mode"
+    }
+} elseif ($expectFullStreamSequence -and -not $hasProviderStreamError) {
+    if ($stream.Body -notmatch "event: delta") {
+        throw "Stream response missing delta event while Ollama is healthy"
+    }
+    if ($stream.Body -notmatch "event: message") {
+        throw "Stream response missing message event while Ollama is healthy"
+    }
+    if ($stream.Body -notmatch "event: done") {
+        throw "Stream response missing done event while Ollama is healthy"
+    }
+} else {
+    if ($stream.Body -notmatch "event: message") {
+        throw "Stream response missing message event in fallback mode"
+    }
+    if ($stream.Body -notmatch "event: done") {
+        throw "Stream response missing done event in fallback mode"
+    }
+    if ($hasProviderStreamError) {
+        Write-Host "Stream fallback detected: provider_stream_error"
+    }
 }
 
 Write-Host "Refreshing token (/api/v1/auth/refresh)..."
