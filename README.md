@@ -494,3 +494,37 @@ Built with:
 ---
 
 **Built by Cyph3r** 🚀
+
+---
+
+## Backend Chat API Updates
+
+Current backend model/provider behavior:
+
+- `POST /api/v1/chat/conversations` accepts an optional `model`
+- Anthropic models are validated against:
+  - `CLAUDE_SONNET_MODEL`
+  - `CLAUDE_OPUS_MODEL`
+- Local Ollama model selection is controlled by `DEFAULT_MODEL` and available Ollama tags
+
+Provider and model introspection endpoints:
+
+- `GET /api/v1/chat/models`
+- `GET /api/v1/chat/providers/health`
+
+Streaming endpoint behavior:
+
+- `POST /api/v1/chat/conversations/{conversation_id}/messages/stream`
+- Emits SSE events: `delta`, `message`, `done`
+- Persists both user and assistant messages (including token metadata)
+
+Recommended `.env` keys:
+
+```bash
+OLLAMA_URL=http://host.docker.internal:11434
+DEFAULT_MODEL=llama3.2:3b-instruct-q4_K_M
+
+CLAUDE_API_KEY=your_anthropic_api_key
+CLAUDE_SONNET_MODEL=claude-sonnet-4.6
+CLAUDE_OPUS_MODEL=claude-opus-4.6
+```

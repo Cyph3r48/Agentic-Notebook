@@ -370,16 +370,29 @@ async def stream_message(
             context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
 
         accumulated = ""
-        async for delta in LLMService.stream_chat_reply(
-            model=conversation.model,
-            user_message=payload.content,
-            context_lines=context_lines,
-        ):
-            accumulated += delta
-            yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+        stream_error_type: str | None = None
+        try:
+            async for delta in LLMService.stream_chat_reply(
+                model=conversation.model,
+                user_message=payload.content,
+                context_lines=context_lines,
+            ):
+                accumulated += delta
+                yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
+        except Exception as exc:
+            logger.warning(
+                "Chat stream provider failed conversation_id={conversation_id}: {error}",
+                conversation_id=str(conversation.id),
+                error=str(exc),
+            )
+            stream_error_type = "provider_stream_error"
+            if context_lines:
+                accumulated = "I found relevant context in your documents:\n" + "\n".join(context_lines[:3])
+            else:
+                accumulated = "I could not find relevant context in your uploaded documents."
 
         if not accumulated:
-            accumulated = "I could not generate a response."
+            accumulated = "I could not find relevant context in your uploaded documents."
         context_documents = list({UUID(source["document_id"]) for source in sources}) if sources else None
         assistant_metadata = {
             "provider": "anthropic" if LLMService.is_anthropic_model(conversation.model) else "ollama",
@@ -389,6 +402,8 @@ async def stream_message(
             "token_estimate": _estimate_tokens(accumulated),
             "total_tokens": _estimate_tokens(accumulated),
         }
+        if stream_error_type:
+            assistant_metadata["error_type"] = stream_error_type
         assistant_message = await chat_repo.create_message(
             conversation_id=conversation.id,
             role="assistant",

@@ -100,6 +100,42 @@ def test_list_conversations_endpoint_with_pagination(monkeypatch):
     assert tracker["sort"] == "desc"
 
 
+def test_list_conversations_endpoint_with_model_and_sort(monkeypatch):
+    rows = [
+        SimpleNamespace(
+            id=uuid4(),
+            title="Filtered",
+            model="claude-sonnet-4-6",
+            created_at=datetime.now(tz=timezone.utc),
+            updated_at=datetime.now(tz=timezone.utc),
+        )
+    ]
+    tracker = {"limit": None, "offset": None, "model": None, "sort": None}
+
+    async def fake_list_conversations_for_user_paginated(self, *, user_id, limit, offset, model=None, sort="desc"):
+        tracker["limit"] = limit
+        tracker["offset"] = offset
+        tracker["model"] = model
+        tracker["sort"] = sort
+        return rows
+
+    monkeypatch.setattr(
+        chat_module.ChatRepository,
+        "list_conversations_for_user_paginated",
+        fake_list_conversations_for_user_paginated,
+    )
+
+    with _build_test_client() as client:
+        response = client.get("/chat/conversations?limit=5&offset=1&model=claude-sonnet-4-6&sort=asc")
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert tracker["limit"] == 5
+    assert tracker["offset"] == 1
+    assert tracker["model"] == "claude-sonnet-4-6"
+    assert tracker["sort"] == "asc"
+
+
 def test_send_message_endpoint(monkeypatch):
     conversation = SimpleNamespace(
         id=uuid4(),
@@ -220,6 +256,49 @@ def test_stream_message_endpoint(monkeypatch):
     assert created_rows[1].content == "stream reply"
 
 
+def test_stream_message_endpoint_falls_back_on_provider_error(monkeypatch):
+    conversation = SimpleNamespace(id=uuid4(), model="llama3.2:3b-instruct-q4_K_M")
+    created_rows = []
+
+    async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
+        return conversation
+
+    async def fake_create_message(self, **kwargs):
+        row = SimpleNamespace(
+            id=uuid4(),
+            conversation_id=kwargs["conversation_id"],
+            role=kwargs["role"],
+            content=kwargs["content"],
+            model=kwargs.get("model"),
+            tokens_used=kwargs.get("tokens_used"),
+            sources=kwargs.get("sources", []),
+            metadata_json=kwargs.get("metadata", {}),
+            created_at=datetime.now(tz=timezone.utc),
+        )
+        created_rows.append(row)
+        return row
+
+    async def fail_stream_chat_reply(cls, *, model, user_message, context_lines):
+        raise RuntimeError("provider unavailable")
+        yield ""
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
+    monkeypatch.setattr(chat_module.ChatRepository, "create_message", fake_create_message)
+    monkeypatch.setattr(chat_module.LLMService, "stream_chat_reply", classmethod(fail_stream_chat_reply))
+
+    with _build_test_client() as client:
+        response = client.post(
+            f"/chat/conversations/{conversation.id}/messages/stream",
+            json={"content": "hello", "use_rag": False},
+        )
+
+    assert response.status_code == 200
+    assert "event: message" in response.text
+    assert "event: done" in response.text
+    assert len(created_rows) == 2
+    assert created_rows[1].metadata_json["error_type"] == "provider_stream_error"
+
+
 def test_get_conversation_endpoint(monkeypatch):
     fake_row = SimpleNamespace(
         id=uuid4(),
@@ -316,6 +395,101 @@ def test_list_messages_endpoint_with_pagination(monkeypatch):
     assert tracker["role"] is None
     assert tracker["has_sources"] is None
     assert tracker["sort"] == "asc"
+
+
+def test_list_messages_endpoint_with_filters(monkeypatch):
+    conversation = SimpleNamespace(id=uuid4())
+    rows = [
+        SimpleNamespace(
+            id=uuid4(),
+            conversation_id=conversation.id,
+            role="assistant",
+            content="hello",
+            model="llama3.2:3b-instruct-q4_K_M",
+            tokens_used=11,
+            sources=[{"snippet": "x"}],
+            metadata_json={},
+            created_at=datetime.now(tz=timezone.utc),
+        )
+    ]
+    tracker = {"limit": None, "offset": None, "role": None, "has_sources": None, "sort": None}
+
+    async def fake_get_conversation_for_user(self, *, conversation_id, user_id):
+        return conversation
+
+    async def fake_list_messages_for_conversation_paginated(
+        self,
+        *,
+        conversation_id,
+        limit,
+        offset,
+        role=None,
+        has_sources=None,
+        sort="asc",
+    ):
+        tracker["limit"] = limit
+        tracker["offset"] = offset
+        tracker["role"] = role
+        tracker["has_sources"] = has_sources
+        tracker["sort"] = sort
+        return rows
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
+    monkeypatch.setattr(
+        chat_module.ChatRepository,
+        "list_messages_for_conversation_paginated",
+        fake_list_messages_for_conversation_paginated,
+    )
+
+    with _build_test_client() as client:
+        response = client.get(
+            f"/chat/conversations/{conversation.id}/messages?limit=3&offset=4&role=assistant&has_sources=true&sort=desc"
+        )
+
+    assert response.status_code == 200
+    assert len(response.json()) == 1
+    assert tracker["limit"] == 3
+    assert tracker["offset"] == 4
+    assert tracker["role"] == "assistant"
+    assert tracker["has_sources"] is True
+    assert tracker["sort"] == "desc"
+
+
+def test_models_endpoint(monkeypatch):
+    async def fake_list_models(cls):
+        return {
+            "ollama": [{"id": "llama3.2:3b-instruct-q4_K_M", "provider": "ollama"}],
+            "anthropic": [{"id": "claude-sonnet-4-6", "provider": "anthropic"}],
+        }
+
+    monkeypatch.setattr(chat_module.LLMService, "list_models", classmethod(fake_list_models))
+
+    with _build_test_client() as client:
+        response = client.get("/chat/models")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert "ollama" in payload
+    assert "anthropic" in payload
+    assert payload["anthropic"][0]["id"] == "claude-sonnet-4-6"
+
+
+def test_provider_health_endpoint(monkeypatch):
+    async def fake_provider_health(cls):
+        return {
+            "ollama": {"healthy": True, "circuit_open": False},
+            "anthropic": {"healthy": False, "circuit_open": True},
+        }
+
+    monkeypatch.setattr(chat_module.LLMService, "provider_health", classmethod(fake_provider_health))
+
+    with _build_test_client() as client:
+        response = client.get("/chat/providers/health")
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ollama"]["healthy"] is True
+    assert payload["anthropic"]["circuit_open"] is True
 
 
 def test_update_conversation_endpoint(monkeypatch):
