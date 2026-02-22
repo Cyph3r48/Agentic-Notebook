@@ -1,30 +1,7 @@
-import { apiClient, withAuth } from './apiClient'
+import apiClient, { API_BASE_URL } from '../api/client'
 
-export async function fetchChatModels(token) {
-  const { data } = await apiClient.get('/chat/models', {
-    headers: withAuth({}, token),
-  })
-  return data
-}
-
-export async function fetchProviderHealth(token) {
-  const { data } = await apiClient.get('/chat/providers/health', {
-    headers: withAuth({}, token),
-  })
-  return data
-}
-
-export async function streamConversationMessage({
-  token,
-  conversationId,
-  content,
-  useRag = false,
-  onDelta,
-  onMessage,
-  onDone,
-  onError,
-}) {
-  const base = (apiClient.defaults.baseURL || '').replace(/\/+$/, '')
+export async function* streamConversationMessage(conversationId, content, useRag = false, token) {
+  const base = (apiClient.defaults.baseURL || API_BASE_URL || '').replace(/\/+$/, '')
   const response = await fetch(`${base}/chat/conversations/${conversationId}/messages/stream`, {
     method: 'POST',
     headers: withAuth(
@@ -41,9 +18,7 @@ export async function streamConversationMessage({
 
   if (!response.ok || !response.body) {
     const body = await response.text().catch(() => '')
-    const error = new Error(`Stream request failed (${response.status}): ${body}`)
-    if (onError) onError(error)
-    throw error
+    throw new Error(`Stream request failed (${response.status}): ${body}`)
   }
 
   const reader = response.body.getReader()
@@ -75,13 +50,15 @@ export async function streamConversationMessage({
       } catch {
         parsed = { raw: rawData }
       }
-
-      if (event === 'delta' && onDelta) onDelta(parsed)
-      if (event === 'message' && onMessage) onMessage(parsed)
-      if (event === 'done' && onDone) onDone(parsed)
+      yield { type: event, data: parsed }
     }
   }
-
-  return true
 }
 
+function withAuth(headers, token) {
+  if (!token) return headers
+  return {
+    ...headers,
+    Authorization: `Bearer ${token}`,
+  }
+}

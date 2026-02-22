@@ -5,6 +5,7 @@ import { AnimatePresence } from 'framer-motion'
 
 import { useAuthStore } from './store/authStore'
 import { Layout } from './components/Layout'
+import ErrorBoundary from './components/ErrorBoundary'
 import { Login } from './pages/Login'
 import { Dashboard } from './pages/Dashboard'
 import { Documents } from './pages/Documents'
@@ -12,7 +13,7 @@ import { Chat } from './pages/Chat'
 import { Settings } from './pages/Settings'
 import { Analytics } from './pages/Analytics'
 
-// Create React Query client
+// Create React Query client with error handling
 const queryClient = new QueryClient({
   defaultOptions: {
     queries: {
@@ -46,30 +47,31 @@ function App() {
           
           {/* Main content */}
           <div className="relative z-10">
-            <AnimatePresence mode="wait">
-              <Routes>
-                <Route path="/login" element={<Login />} />
-                
-                <Route
-                  path="/*"
-                  element={
-                    <ProtectedRoute>
-                      <Layout>
-                        <Routes>
-                          <Route path="/" element={<Dashboard />} />
-                          <Route path="/documents" element={<Documents />} />
-                          <Route path="/chat" element={<Chat />} />
-                          <Route path="/chat/:conversationId" element={<Chat />} />
-                          <Route path="/analytics" element={<Analytics />} />
-                          <Route path="/settings" element={<Settings />} />
-                          <Route path="*" element={<Navigate to="/" replace />} />
-                        </Routes>
-                      </Layout>
-                    </ProtectedRoute>
-                  }
-                />
-              </Routes>
-            </AnimatePresence>
+            <ErrorBoundary>
+              <AnimatePresence mode="wait">
+                <Routes>
+                  <Route path="/login" element={<Login />} />
+
+                  <Route
+                    path="/"
+                    element={
+                      <ProtectedRoute>
+                        <Layout />
+                      </ProtectedRoute>
+                    }
+                  >
+                    <Route index element={<Dashboard />} />
+                    <Route path="documents" element={<Documents />} />
+                    <Route path="chat" element={<Chat />} />
+                    <Route path="chat/:conversationId" element={<Chat />} />
+                    <Route path="analytics" element={<Analytics />} />
+                    <Route path="settings" element={<Settings />} />
+                  </Route>
+
+                  <Route path="*" element={<Navigate to="/" replace />} />
+                </Routes>
+              </AnimatePresence>
+            </ErrorBoundary>
           </div>
           
           {/* Toast notifications */}
