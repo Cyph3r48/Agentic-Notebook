@@ -4,6 +4,28 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Theme variables - dark mode (default) */
+:root,
+html.dark {
+  --color-dark-base: #0a0e1a;
+  --color-dark-surface: #0f1419;
+  --color-dark-elevated: #1a1f2e;
+  --text-color: #ffffff;
+  --border-color: rgba(255, 255, 255, 0.1);
+  --glass-white: rgba(255, 255, 255, 0.05);
+}
+
+/* Light mode */
+html:not(.dark) {
+  --color-dark-base: #ffffff;
+  --color-dark-surface: #f5f5f5;
+  --color-dark-elevated: #eeeeee;
+  --text-color: #1a1a1a;
+  --border-color: rgba(0, 0, 0, 0.1);
+  --glass-white: rgba(0, 0, 0, 0.02);
+  color-scheme: light;
+}
+
 @layer base {
   * {
     @apply border-glass-border;
@@ -15,7 +37,8 @@
   }
   
   body {
-    @apply bg-dark-base text-white font-body;
+    @apply bg-dark-base font-body;
+    color: var(--text-color);
     min-height: 100vh;
     overflow-x: hidden;
   }
@@ -31,8 +54,13 @@
 
 @layer components {
   .glass-card {
-    @apply bg-glass-white backdrop-blur-xl border border-glass-border rounded-xl;
-    box-shadow: 0 8px 32px 0 rgba(0, 102, 255, 0.1);
+    @apply bg-dark-elevated/40 backdrop-blur-2xl border border-glass-border/40 rounded-xl relative overflow-hidden;
+    box-shadow: 0 4px 24px -1px rgba(0, 0, 0, 0.4), inset 0 1px 0 0 rgba(255, 255, 255, 0.1);
+  }
+  
+  .glass-card::before {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-br from-blue-500/5 to-purple-500/5 pointer-events-none opacity-50;
   }
   
   .glass-card-hover {
@@ -40,43 +68,59 @@
   }
   
   .glass-card-hover:hover {
-    @apply bg-glass-hover;
-    box-shadow: 0 12px 48px 0 rgba(0, 102, 255, 0.15);
+    @apply bg-dark-elevated/60 border-blue-500/30 transform -translate-y-1;
+    box-shadow: 0 12px 32px -4px rgba(0, 102, 255, 0.15), 0 4px 12px -2px rgba(153, 102, 255, 0.1), inset 0 1px 0 0 rgba(255, 255, 255, 0.15);
   }
   
   .glass-button {
-    @apply bg-glass-white backdrop-blur-md border border-glass-border rounded-lg px-4 py-2;
-    @apply text-sm font-medium transition-all duration-200;
+    @apply bg-dark-elevated/50 backdrop-blur-md border border-white/10 rounded-lg px-4 py-2 relative overflow-hidden;
+    @apply text-sm font-medium transition-all duration-300;
+    box-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
   }
   
   .glass-button:hover {
-    @apply bg-glass-hover border-blue-500/50;
+    @apply bg-white/10 border-blue-400/50 shadow-[0_0_15px_rgba(0,102,255,0.2)];
+  }
+  
+  .glass-button:active {
+    @apply transform scale-95;
   }
   
   .glass-button-primary {
-    @apply bg-blue-600 border-blue-500 text-white;
-    box-shadow: 0 0 20px rgba(0, 102, 255, 0.4);
+    @apply border-blue-400/40 text-white relative overflow-hidden;
+    background: linear-gradient(135deg, rgba(0, 102, 255, 0.8) 0%, rgba(153, 102, 255, 0.6) 100%);
+    box-shadow: 0 4px 20px rgba(0, 102, 255, 0.3), inset 0 1px 0 0 rgba(255, 255, 255, 0.2);
   }
   
   .glass-button-primary:hover {
-    @apply bg-blue-500;
-    box-shadow: 0 0 30px rgba(0, 102, 255, 0.6);
+    box-shadow: 0 0 25px rgba(0, 102, 255, 0.5), inset 0 1px 0 0 rgba(255, 255, 255, 0.4);
+    @apply border-blue-300;
+  }
+  
+  .glass-button-primary::after {
+    content: '';
+    @apply absolute inset-0 bg-gradient-to-r from-transparent via-white/20 to-transparent -translate-x-full;
+    transition: transform 0.6s ease;
+  }
+  
+  .glass-button-primary:hover::after {
+    @apply translate-x-full;
   }
   
   .glass-input {
     @apply bg-dark-surface border border-glass-border rounded-lg px-4 py-3;
     @apply text-white placeholder-gray-500;
-    @apply focus:outline-none focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/50;
+    @apply focus:outline-none focus:border-claude-orange-400/60 focus:ring-1 focus:ring-claude-orange-400/50;
     @apply transition-all duration-200;
   }
   
   .glass-input:focus {
-    box-shadow: 0 0 20px rgba(0, 102, 255, 0.2);
+    box-shadow: 0 0 16px rgba(0, 102, 255, 0.16), 0 0 20px rgba(255, 153, 51, 0.18);
   }
   
   .text-gradient {
     @apply bg-clip-text text-transparent;
-    background-image: linear-gradient(135deg, #0066ff 0%, #9966ff 100%);
+    background-image: linear-gradient(135deg, #0066ff 0%, #8a78ff 60%, #ff9933 100%);
   }
   
   .text-gradient-orange {

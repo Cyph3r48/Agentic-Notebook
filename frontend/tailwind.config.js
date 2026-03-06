@@ -7,10 +7,10 @@ export default {
   theme: {
     extend: {
       colors: {
-        // Dark blue base
-        'dark-base': '#0a0e1a',
-        'dark-surface': '#0f1419',
-        'dark-elevated': '#1a1f2e',
+        // Dark blue base - using CSS variables for theme switching
+        'dark-base': 'var(--color-dark-base)',
+        'dark-surface': 'var(--color-dark-surface)',
+        'dark-elevated': 'var(--color-dark-elevated)',
         
         // Blue tones
         'blue': {
