@@ -80,16 +80,27 @@ export const Settings = () => {
   })
   
   const [isSaving, setIsSaving] = useState(false)
-  
+  const [theme, setTheme] = useState('dark')
+
   const [profileForm, setProfileForm] = useState({
     fullName: user?.full_name || '',
     email: user?.email || '',
   })
-  
+
   const [passwordForm, setPasswordForm] = useState({
     currentPassword: '',
     newPassword: '',
     confirmPassword: '',
+  })
+
+  const [ollamaForm, setOllamaForm] = useState({
+    url: localStorage.getItem('ollama_url') || 'http://localhost:11434',
+    apiKey: localStorage.getItem('ollama_api_key') || '',
+    models: (localStorage.getItem('ollama_models') || 'gemma3:4b').split(','),
+  })
+
+  const [claudeForm, setClaudeForm] = useState({
+    apiKey: localStorage.getItem('claude_api_key') || '',
   })
 
   useEffect(() => {
@@ -97,17 +108,69 @@ export const Settings = () => {
       fullName: user?.full_name || '',
       email: user?.email || '',
     })
+    setTheme(localStorage.getItem('theme') || 'dark')
   }, [user?.full_name, user?.email])
 
   const handleSaveProfile = async () => {
-    setIsSaving(true)
-    await new Promise(resolve => setTimeout(resolve, 350))
-    setIsSaving(false)
-    toast.error('Profile update endpoint is not available in backend yet.')
+    try {
+      setIsSaving(true)
+      const updated = await settingsAPI.updateProfile(profileForm.fullName)
+      setProfileForm((prev) => ({
+        ...prev,
+        fullName: updated.full_name || '',
+      }))
+      toast.success('Profile updated')
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to update profile')
+    } finally {
+      setIsSaving(false)
+    }
   }
 
-  const handleChangePassword = () => {
-    toast.error('Password change endpoint is not available in backend yet.')
+  const handleChangePassword = async () => {
+    if (!passwordForm.currentPassword || !passwordForm.newPassword || !passwordForm.confirmPassword) {
+      toast.error('Fill out all password fields')
+      return
+    }
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      toast.error('New password and confirmation must match')
+      return
+    }
+
+    try {
+      setIsSaving(true)
+      await settingsAPI.changePassword(passwordForm.currentPassword, passwordForm.newPassword)
+      setPasswordForm({
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+      })
+      toast.success('Password changed')
+    } catch (error) {
+      toast.error(error.response?.data?.message || 'Failed to change password')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleSaveOllama = () => {
+    if (!ollamaForm.url) {
+      toast.error('Ollama URL is required')
+      return
+    }
+    localStorage.setItem('ollama_url', ollamaForm.url)
+    localStorage.setItem('ollama_api_key', ollamaForm.apiKey)
+    localStorage.setItem('ollama_models', ollamaForm.models.join(','))
+    toast.success('Ollama settings saved')
+  }
+
+  const handleSaveClaude = () => {
+    if (!claudeForm.apiKey) {
+      toast.error('Claude API key is required')
+      return
+    }
+    localStorage.setItem('claude_api_key', claudeForm.apiKey)
+    toast.success('Claude API key saved')
   }
 
   return (
@@ -177,9 +240,6 @@ export const Settings = () => {
               )}
             </button>
           </div>
-          <p className="text-xs text-yellow-400 mt-2">
-            Profile is currently read-only from backend (`/auth/me`).
-          </p>
         </SettingsSection>
 
         {/* Security Section */}
@@ -197,7 +257,7 @@ export const Settings = () => {
                   value={passwordForm.currentPassword}
                   onChange={(e) => setPasswordForm({ ...passwordForm, currentPassword: e.target.value })}
                   className="glass-input w-full pl-10"
-                  placeholder="••••••••"
+                  placeholder="********"
                 />
               </div>
             </FormField>
@@ -209,7 +269,7 @@ export const Settings = () => {
                   value={passwordForm.newPassword}
                   onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
                   className="glass-input w-full"
-                  placeholder="••••••••"
+                  placeholder="********"
                 />
               </FormField>
               
@@ -219,7 +279,7 @@ export const Settings = () => {
                   value={passwordForm.confirmPassword}
                   onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
                   className="glass-input w-full"
-                  placeholder="••••••••"
+                  placeholder="********"
                 />
               </FormField>
             </div>
@@ -252,25 +312,72 @@ export const Settings = () => {
                     <p className="font-medium">Ollama (Local Models)</p>
                     <p className="text-sm text-gray-400">Run AI models locally on your machine</p>
                   </div>
-                </div>                
+                </div>
                 {isLoadingHealth ? (
                   <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-                ) : health?.ollama?.ok ? (
+                ) : (health?.ollama?.healthy ?? health?.ollama?.ok) ? (
                   <StatusBadge status="online" text="Connected" />
                 ) : (
                   <StatusBadge status="offline" text="Disconnected" />
                 )}
               </div>
-              
-              {!isLoadingHealth && !health?.ollama?.ok && (
+
+              {/* Ollama Configuration Fields */}
+              <div className="space-y-4 mb-4 p-3 rounded-lg bg-white/5">
+                <FormField label="Ollama API URL">
+                  <input
+                    type="text"
+                    value={ollamaForm.url}
+                    onChange={(e) => setOllamaForm({ ...ollamaForm, url: e.target.value })}
+                    className="glass-input w-full"
+                    placeholder="http://localhost:11434"
+                  />
+                </FormField>
+
+                <FormField label="API Key (Optional)">
+                  <div className="relative">
+                    <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
+                    <input
+                      type="password"
+                      value={ollamaForm.apiKey}
+                      onChange={(e) => setOllamaForm({ ...ollamaForm, apiKey: e.target.value })}
+                      className="glass-input w-full pl-10"
+                      placeholder="Your Ollama API key (if required)"
+                    />
+                  </div>
+                </FormField>
+
+                <FormField label="Default Models (comma-separated)">
+                  <input
+                    type="text"
+                    value={ollamaForm.models.join(', ')}
+                    onChange={(e) => setOllamaForm({
+                      ...ollamaForm,
+                      models: e.target.value.split(',').map(m => m.trim()).filter(Boolean)
+                    })}
+                    className="glass-input w-full"
+                    placeholder="gemma3:4b, kimi-k2.5:cloud"
+                  />
+                </FormField>
+
+                <button
+                  onClick={handleSaveOllama}
+                  className="glass-button-primary px-4 py-2 flex items-center gap-2 w-full justify-center"
+                >
+                  <Save className="w-4 h-4" />
+                  Save Ollama Settings
+                </button>
+              </div>
+
+              {!isLoadingHealth && !(health?.ollama?.healthy ?? health?.ollama?.ok) && (
                 <div className="p-3 rounded-lg bg-yellow-500/10 border border-yellow-500/20 text-yellow-400 text-sm flex items-start gap-2">
                   <AlertCircle className="w-4 h-4 flex-shrink-0 mt-0.5" />
                   <div>
                     <p className="font-medium mb-1">Ollama not detected</p>
-                    <p>Install Ollama from ollama.com to use local models like Llama 3.2, Gemma 2, and Qwen 2.5</p>
-                    <a 
-                      href="https://ollama.com" 
-                      target="_blank" 
+                    <p>Make sure Ollama is running at the URL above</p>
+                    <a
+                      href="https://ollama.com"
+                      target="_blank"
                       rel="noopener noreferrer"
                       className="inline-flex items-center gap-1 mt-2 text-blue-400 hover:text-blue-300"
                     >
@@ -279,7 +386,7 @@ export const Settings = () => {
                   </div>
                 </div>
               )}
-              
+
               {isLoadingModels ? (
                 <div className="flex items-center gap-2 text-sm text-gray-400 mt-3">
                   <Loader2 className="w-4 h-4 animate-spin" />
@@ -290,16 +397,25 @@ export const Settings = () => {
                   <p className="text-sm text-gray-400 mb-2">Available models:</p>
                   <div className="flex flex-wrap gap-2">
                     {models.ollama.map((model) => (
-                      <span 
+                      <span
                         key={model.id}
                         className="px-3 py-1 rounded-full bg-white/10 text-sm"
                       >
-                        {model.name}
+                        {model.name || model.id}
                       </span>
                     ))}
                   </div>
                 </div>
+              ) : !isLoadingModels && (health?.ollama?.healthy ?? health?.ollama?.ok) ? (
+                <p className="text-sm text-gray-400 mt-3">
+                  Ollama is reachable, but no models were returned by `/api/tags`.
+                </p>
               ) : null}
+
+              <p className="mt-3 text-xs text-gray-500">
+                This app reads models directly from your Ollama instance. If you use Ollama Cloud through the Ollama app,
+                cloud models should appear here automatically once they show up in Ollama `/api/tags`.
+              </p>
             </div>
 
             {/* Claude API Section */}
@@ -316,34 +432,46 @@ export const Settings = () => {
                 </div>
                 {isLoadingHealth ? (
                   <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
-                ) : health?.anthropic?.ok ? (
+                ) : (health?.anthropic?.healthy ?? health?.anthropic?.ok) ? (
                   <StatusBadge status="online" text="Connected" />
                 ) : (
                   <StatusBadge status="warning" text="Not Configured" />
                 )}
               </div>
-              
-              <FormField label="API Key">
-                <div className="relative">
-                  <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
-                  <input
-                    type="password"
-                    placeholder="sk-ant-..."
-                    className="glass-input w-full pl-10"
-                  />
-                </div>
-                <p className="mt-1 text-xs text-gray-500">
-                  Your API key is stored securely and never shared. 
-                  <a 
-                    href="https://console.anthropic.com" 
-                    target="_blank" 
-                    rel="noopener noreferrer"
-                    className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1"
-                  >
-                    Get API key <ExternalLink className="w-3 h-3" />
-                  </a>
-                </p>
-              </FormField>
+
+              <div className="space-y-4 p-3 rounded-lg bg-white/5">
+                <FormField label="API Key">
+                  <div className="relative">
+                    <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
+                    <input
+                      type="password"
+                      value={claudeForm.apiKey}
+                      onChange={(e) => setClaudeForm({ ...claudeForm, apiKey: e.target.value })}
+                      placeholder="sk-ant-..."
+                      className="glass-input w-full pl-10"
+                    />
+                  </div>
+                  <p className="mt-1 text-xs text-gray-500">
+                    Your API key is stored securely in your browser.
+                    <a
+                      href="https://console.anthropic.com"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1"
+                    >
+                      Get API key <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </p>
+                </FormField>
+
+                <button
+                  onClick={handleSaveClaude}
+                  className="glass-button-primary px-4 py-2 flex items-center gap-2 w-full justify-center"
+                >
+                  <Save className="w-4 h-4" />
+                  Save Claude API Key
+                </button>
+              </div>
             </div>
           </div>
         </SettingsSection>
@@ -397,9 +525,48 @@ export const Settings = () => {
             <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
               <span>Theme</span>
               <div className="flex items-center gap-2">
-                <button className="px-4 py-2 rounded-lg bg-blue-500 text-white text-sm">Dark</button>
-                <button className="px-4 py-2 rounded-lg bg-white/10 text-gray-400 text-sm hover:bg-white/20">Light</button>
-                <button className="px-4 py-2 rounded-lg bg-white/10 text-gray-400 text-sm hover:bg-white/20">System</button>
+                <button
+                  onClick={() => {
+                    setTheme('dark')
+                    localStorage.setItem('theme', 'dark')
+                    toast.success('Theme set to Dark')
+                  }}
+                  className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                    theme === 'dark'
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                  }`}
+                >
+                  Dark
+                </button>
+                <button
+                  onClick={() => {
+                    setTheme('light')
+                    localStorage.setItem('theme', 'light')
+                    toast.success('Theme set to Light')
+                  }}
+                  className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                    theme === 'light'
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                  }`}
+                >
+                  Light
+                </button>
+                <button
+                  onClick={() => {
+                    setTheme('system')
+                    localStorage.setItem('theme', 'system')
+                    toast.success('Theme set to System')
+                  }}
+                  className={`px-4 py-2 rounded-lg text-sm transition-colors ${
+                    theme === 'system'
+                      ? 'bg-blue-500 text-white'
+                      : 'bg-white/10 text-gray-400 hover:bg-white/20'
+                  }`}
+                >
+                  System
+                </button>
               </div>
             </div>
             <div className="flex items-center justify-between p-3 rounded-lg bg-white/5">
