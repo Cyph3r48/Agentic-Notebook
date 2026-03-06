@@ -103,13 +103,38 @@ export const Settings = () => {
     apiKey: localStorage.getItem('claude_api_key') || '',
   })
 
+  // Apply theme to DOM
+  const applyTheme = (themeValue) => {
+    const html = document.documentElement
+    if (themeValue === 'light') {
+      html.classList.remove('dark')
+    } else if (themeValue === 'dark') {
+      html.classList.add('dark')
+    } else if (themeValue === 'system') {
+      // Check system preference
+      const prefersDark = window.matchMedia('(prefers-color-scheme: dark)').matches
+      if (prefersDark) {
+        html.classList.add('dark')
+      } else {
+        html.classList.remove('dark')
+      }
+    }
+  }
+
   useEffect(() => {
     setProfileForm({
       fullName: user?.full_name || '',
       email: user?.email || '',
     })
-    setTheme(localStorage.getItem('theme') || 'dark')
+    const savedTheme = localStorage.getItem('theme') || 'dark'
+    setTheme(savedTheme)
+    applyTheme(savedTheme)
   }, [user?.full_name, user?.email])
+
+  // Apply theme whenever it changes
+  useEffect(() => {
+    applyTheme(theme)
+  }, [theme])
 
   const handleSaveProfile = async () => {
     try {
