@@ -22,7 +22,7 @@ from app.schemas.chat import (
     MessageCreateRequest,
     MessageResponse,
 )
-from app.services.llm_service import LLMService
+from app.services.llm_service import LLMService, StreamOutcome
 from app.services.vector_search_service import VectorSearchService
 
 
@@ -40,12 +40,13 @@ def _estimate_tokens(text: str) -> int:
     return max(int(len(text.split()) * 1.3), 1)
 
 
-def _resolve_model(model: str | None) -> str:
+async def _resolve_model(model: str | None) -> str:
     selected = (model or settings.DEFAULT_MODEL).strip()
     if not selected:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Model is required")
     if selected.lower().startswith("claude-"):
-        allowed = {settings.CLAUDE_SONNET_MODEL, settings.CLAUDE_OPUS_MODEL}
+        selected = LLMService.normalize_claude_model(selected)
+        allowed = await LLMService.allowed_claude_models()
         if selected not in allowed:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -68,6 +69,50 @@ def _as_message_response(message) -> MessageResponse:
     )
 
 
+async def _retrieve_sources(
+    session: AsyncSession,
+    *,
+    user_id: UUID,
+    query: str,
+    use_rag: bool,
+) -> tuple[list[dict], list[str]]:
+    if not use_rag:
+        return [], []
+    search_results = await VectorSearchService(session).search(
+        user_id=user_id,
+        query=query,
+        limit=3,
+        offset=0,
+        min_score=0.1,
+    )
+    sources = [
+        {
+            "source_id": f"{row['document_id']}:{row['chunk_index']}",
+            "document_id": row["document_id"],
+            "original_filename": row["original_filename"],
+            "chunk_index": row["chunk_index"],
+            "rank": rank,
+            "score": row["score"],
+            "snippet": _snippet(row["content"]),
+            "content_hash": row.get("content_hash"),
+            "span_start": row.get("span_start"),
+            "span_end": row.get("span_end"),
+        }
+        for rank, row in enumerate(search_results, start=1)
+    ]
+    context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
+    return sources, context_lines
+
+
+async def _load_history(chat_repo: ChatRepository, conversation) -> list[dict[str, str]]:
+    # Fetch a few extra rows: errored replies are skipped when the history is built.
+    rows = await chat_repo.list_recent_messages(
+        conversation_id=conversation.id,
+        limit=settings.LLM_HISTORY_MESSAGES + 4,
+    )
+    return LLMService.history_from_messages(rows)
+
+
 async def _process_chat_turn(
     *,
     chat_repo: ChatRepository,
@@ -76,6 +121,8 @@ async def _process_chat_turn(
     payload: MessageCreateRequest,
     session: AsyncSession,
 ) -> ChatTurnResponse:
+    # Load history before saving the new message so it is not sent twice.
+    history = await _load_history(chat_repo, conversation)
     user_message = await chat_repo.create_message(
         conversation_id=conversation.id,
         role="user",
@@ -85,37 +132,19 @@ async def _process_chat_turn(
         metadata={"rag_used": payload.use_rag},
     )
 
-    sources: list[dict] = []
-    context_lines: list[str] = []
-    if payload.use_rag:
-        search_results = await VectorSearchService(session).search(
-            user_id=current_user.id,
-            query=payload.content,
-            limit=3,
-            offset=0,
-            min_score=0.1,
-        )
-        sources = [
-            {
-                "source_id": f"{row['document_id']}:{row['chunk_index']}",
-                "document_id": row["document_id"],
-                "original_filename": row["original_filename"],
-                "chunk_index": row["chunk_index"],
-                "rank": rank,
-                "score": row["score"],
-                "snippet": _snippet(row["content"]),
-                "content_hash": row.get("content_hash"),
-                "span_start": row.get("span_start"),
-                "span_end": row.get("span_end"),
-            }
-            for rank, row in enumerate(search_results, start=1)
-        ]
-        context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
+    sources, context_lines = await _retrieve_sources(
+        session,
+        user_id=current_user.id,
+        query=payload.content,
+        use_rag=payload.use_rag,
+    )
 
     assistant_text, llm_metadata = await LLMService.generate_chat_reply(
         model=conversation.model,
         user_message=payload.content,
         context_lines=context_lines,
+        history=history,
+        system_prompt=getattr(conversation, "system_prompt", None),
     )
     context_documents = list({UUID(source["document_id"]) for source in sources}) if sources else None
     assistant_message = await chat_repo.create_message(
@@ -151,7 +180,7 @@ async def create_conversation(
     row = await chat_repo.create_conversation(
         user_id=current_user.id,
         title=payload.title,
-        model=_resolve_model(payload.model),
+        model=await _resolve_model(payload.model),
     )
     logger.bind(
         request_id=getattr(request.state, "request_id", None),
@@ -334,6 +363,8 @@ async def stream_message(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
 
     async def _events():
+        # Load history before saving the new message so it is not sent twice.
+        history = await _load_history(chat_repo, conversation)
         user_message = await chat_repo.create_message(
             conversation_id=conversation.id,
             role="user",
@@ -342,40 +373,24 @@ async def stream_message(
             tokens_used=_estimate_tokens(payload.content),
             metadata={"rag_used": payload.use_rag},
         )
-        sources: list[dict] = []
-        context_lines: list[str] = []
-        if payload.use_rag:
-            search_results = await VectorSearchService(session).search(
-                user_id=current_user.id,
-                query=payload.content,
-                limit=3,
-                offset=0,
-                min_score=0.1,
-            )
-            sources = [
-                {
-                    "source_id": f"{row['document_id']}:{row['chunk_index']}",
-                    "document_id": row["document_id"],
-                    "original_filename": row["original_filename"],
-                    "chunk_index": row["chunk_index"],
-                    "rank": rank,
-                    "score": row["score"],
-                    "snippet": _snippet(row["content"]),
-                    "content_hash": row.get("content_hash"),
-                    "span_start": row.get("span_start"),
-                    "span_end": row.get("span_end"),
-                }
-                for rank, row in enumerate(search_results, start=1)
-            ]
-            context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
+        sources, context_lines = await _retrieve_sources(
+            session,
+            user_id=current_user.id,
+            query=payload.content,
+            use_rag=payload.use_rag,
+        )
 
         accumulated = ""
         stream_error_type: str | None = None
+        outcome = StreamOutcome()
         try:
             async for delta in LLMService.stream_chat_reply(
                 model=conversation.model,
                 user_message=payload.content,
                 context_lines=context_lines,
+                history=history,
+                system_prompt=getattr(conversation, "system_prompt", None),
+                outcome=outcome,
             ):
                 accumulated += delta
                 yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
@@ -385,7 +400,7 @@ async def stream_message(
                 conversation_id=str(conversation.id),
                 error=str(exc),
             )
-            stream_error_type = "provider_stream_error"
+            stream_error_type = outcome.error_type or "provider_stream_error"
             if context_lines:
                 accumulated = "I found relevant context in your documents:\n" + "\n".join(context_lines[:3])
             else:
@@ -394,22 +409,34 @@ async def stream_message(
         if not accumulated:
             accumulated = "I could not find relevant context in your uploaded documents."
         context_documents = list({UUID(source["document_id"]) for source in sources}) if sources else None
+        estimate = _estimate_tokens(accumulated)
+        measured_total = (outcome.input_tokens or 0) + (outcome.output_tokens or 0)
+        total_tokens = measured_total or estimate
         assistant_metadata = {
             "provider": "anthropic" if LLMService.is_anthropic_model(conversation.model) else "ollama",
             "model": conversation.model,
             "rag_used": payload.use_rag,
             "source_count": len(sources),
-            "token_estimate": _estimate_tokens(accumulated),
-            "total_tokens": _estimate_tokens(accumulated),
+            "token_estimate": estimate,
+            "total_tokens": total_tokens,
         }
-        if stream_error_type:
-            assistant_metadata["error_type"] = stream_error_type
+        if outcome.input_tokens:
+            assistant_metadata["input_tokens"] = outcome.input_tokens
+        if outcome.output_tokens:
+            assistant_metadata["output_tokens"] = outcome.output_tokens
+        if outcome.truncated:
+            assistant_metadata["truncated"] = True
+        if outcome.refusal_category:
+            assistant_metadata["refusal_category"] = outcome.refusal_category
+        error_type = stream_error_type or outcome.error_type
+        if error_type:
+            assistant_metadata["error_type"] = error_type
         assistant_message = await chat_repo.create_message(
             conversation_id=conversation.id,
             role="assistant",
             content=accumulated,
             model=conversation.model,
-            tokens_used=int(assistant_metadata["total_tokens"]),
+            tokens_used=int(total_tokens),
             sources=sources,
             context_documents=context_documents,
             metadata=assistant_metadata,

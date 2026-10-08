@@ -286,4 +286,10 @@ Run `ocr-review-loop` (delegation mode) on the diff before committing.
 
 ## AMENDMENTS
 
-- (none yet)
+- 2026-10-08 - Implemented. Deviations from the plan, all intentional:
+  - Added effort-capability handling. Review found that the live Models API lists older models that reject `output_config.effort`; the service now records per-model support (and per-level support) from `capabilities.effort` and omits `effort` when unsupported. The catalog is loaded before the first Claude call.
+  - `list_models` adds `name` to Ollama entries as well as Claude entries; the Chat model picker renders `model.name`, which the backend never returned.
+  - `stream_chat_reply` now records circuit-breaker success and failure and sets `outcome.error_type` on exceptions (the old streaming path did neither).
+  - Streaming Ollama has no retry (output may already have been sent). Only the non-streaming call retries.
+  - `test_chat_endpoints.py` uses one autouse fixture for empty history instead of per-test fakes.
+  - Review ran inline in the same session, not in a fresh-context subagent.

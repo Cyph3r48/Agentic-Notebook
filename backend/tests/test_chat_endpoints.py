@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
@@ -18,6 +19,16 @@ async def _fake_db_session():
 
 def _fake_user():
     return SimpleNamespace(id=uuid4(), role="user")
+
+
+@pytest.fixture(autouse=True)
+def _empty_history(monkeypatch):
+    """Endpoints load chat history from the database; these tests run without one."""
+
+    async def fake_list_recent_messages(self, *, conversation_id, limit):
+        return []
+
+    monkeypatch.setattr(chat_module.ChatRepository, "list_recent_messages", fake_list_recent_messages)
 
 
 def _build_test_client() -> TestClient:
@@ -171,7 +182,7 @@ def test_send_message_endpoint(monkeypatch):
             }
         ]
 
-    async def fake_llm_reply(self, *, model, user_message, context_lines):
+    async def fake_llm_reply(self, *, model, user_message, context_lines, **kwargs):
         return "assistant-response", {"provider": "ollama", "model": model}
 
     monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
@@ -234,7 +245,7 @@ def test_stream_message_endpoint(monkeypatch):
         created_rows.append(row)
         return row
 
-    async def fake_stream_chat_reply(cls, *, model, user_message, context_lines):
+    async def fake_stream_chat_reply(cls, *, model, user_message, context_lines, **kwargs):
         yield "stream "
         yield "reply"
 
@@ -278,7 +289,7 @@ def test_stream_message_endpoint_falls_back_on_provider_error(monkeypatch):
         created_rows.append(row)
         return row
 
-    async def fail_stream_chat_reply(cls, *, model, user_message, context_lines):
+    async def fail_stream_chat_reply(cls, *, model, user_message, context_lines, **kwargs):
         raise RuntimeError("provider unavailable")
         yield ""
 

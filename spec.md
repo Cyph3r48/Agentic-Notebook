@@ -58,6 +58,11 @@ Replace the `startswith("claude-")` routing in `backend/app/services/llm_service
 - Real conversation history is sent, not just the latest message.
 - Cross-provider fallback is opt-in and respects the sensitivity gate (a sensitive turn never falls back to a frontier provider).
 
+Status (2026-10-08): the history, timeout, model-ID and Anthropic-SDK parts are done inside `LLMService` (see `progress.md`). That
+code is the starting point for the adapters: `StreamOutcome` already carries stop reason, real token usage and normalized
+`error_type` values (`provider_timeout`, `provider_auth_error`, `provider_rate_limited`, `provider_http_error`, `provider_refusal`,
+`provider_error`). The `LLMProvider` interface, the registry, OpenAI and Ollama cloud are still open.
+
 ### 3.2 Settings (planned)
 
 - Choose provider and model for the agent; choose the default for the decision layer.
