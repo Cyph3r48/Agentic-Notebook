@@ -19,3 +19,7 @@ frontend/dist/
 frontend/.vite/
 npm-debug.log*
 yarn-error.log*
+
+# Agent tooling
+.ocr/
+logs/

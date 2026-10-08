@@ -30,3 +30,4 @@ Update `progress.md` (move items, add a Log line, write the next step). If behav
 - Add or update tests with every behavior change; CI must stay green.
 - Keep changes small and in scope; note unrelated problems in `progress.md` instead of fixing them in passing.
 - Follow `docs/dev-workflow.md` for planning, review and PR conventions. Do not open a PR unless asked.
+- Writing for people (commit messages, PR text, README/docs, replies): apply the `unslop` skill, but keep required attribution trailer lines as given.

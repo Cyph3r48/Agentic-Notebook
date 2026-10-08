@@ -44,12 +44,17 @@ Fix these before building new features.
 9. [ ] SMC adapter (`MEMORY_BACKEND=smc`) once its access method is known.
 10. [ ] Frontend tests + CI; dependency audit; production-config validation.
 
-## Dev workflow setup
+## Dev workflow setup (see `docs/dev-workflow.md`)
 
-- [ ] Install Ponytail plugin (see `docs/dev-workflow.md`).
-- [ ] Install and review skills from `michaelshimeles/skills`; replace Greptile-based skills with Open Code Review.
-- [ ] Pick and review the "Dark Factory" skill source.
+- [x] `unslop` vendored into `.claude/skills/` (MIT)
+- [ ] You: install Ponytail (`/plugin marketplace add DietrichGebert/ponytail`, `/plugin install ponytail@ponytail`)
+- [ ] You: install Alibaba `ocr` and configure a provider; run it once so `ocrloop` can be written against real output
+- [ ] Read and vendor Cole's PIV skills (prime, plan, implement, validate, review-changes, commit); fill in `piv-validate`
+- [ ] Read and vendor hooks: secrets guard, session start, action log (stop-tests hook waits for a non-Docker test command)
+- [ ] Write `MISSION.md` with a seven-item out-of-scope list
+- [ ] Decide on `ocrloop` severity threshold
 
 ## Log
 
 - 2026-10-08 — Audited repo against the target spec; reorganized docs into `docs/`; drafted `spec.md`, `progress.md`, `CLAUDE.md`, `AGENTS.md`, `docs/dev-workflow.md`; rewrote README. Nothing run or tested yet.
+- 2026-10-08 — Reviewed three skill repos (Shimeles, Cole skills, Cole factory). Vendored `unslop`; rewrote `docs/dev-workflow.md` as the combined factory plan. Nothing else installed.
