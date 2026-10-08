@@ -1,6 +1,6 @@
 # Dev workflow: the software factory
 
-Status: **plan, partly installed.** Researched 2026-10-08 from the sources below. Only `unslop` is installed so far (`.claude/skills/unslop/`). Everything else here waits for approval.
+Status: **installed (supervised level).** Skills, hooks and the review loop are in `.claude/`. Ponytail is a plugin you install yourself, and a session restart is needed for new skills to load. Provenance and licences: `.claude/ATTRIBUTION.md`.
 
 Skills and plugins run with the agent's permissions. Read a skill's source before it goes into `.claude/`, and vendor files instead of depending on a remote repo at runtime.
 
@@ -30,16 +30,17 @@ prime -> plan -> isolate -> implement -> validate -> review -> prove -> commit -
 
 | Step | Skill | From | State |
 |---|---|---|---|
-| Prime | `prime-codebase`, `prime-backend`, `prime-frontend` | Cole | adopt after reading |
-| Plan | `piv-plan-implementation` | Cole | adopt after reading |
-| Isolate | `new-feature` | Shimeles | install locally via `npx skills add` (no licence to vendor); Claude Code already manages worktrees |
-| Implement | `piv-implement`, `code-structure`, Ponytail | Cole, Shimeles | adopt; map `code-structure` onto our layers (below) |
-| Validate | `piv-validate` | Cole | adopt, fill in our commands (below) |
-| Review | `piv-review-changes` + `ocr review` | Cole, Alibaba | adopt; see section 4 |
-| Prove | `evidence-driven-testing` | Shimeles | defer until UI work; needs Playwright/FFmpeg |
+| Prime | `prime-codebase`, `prime-backend`, `prime-frontend` | Cole | **installed** (Jira/Confluence step removed) |
+| Plan | `piv-plan-implementation` | Cole | **installed** (GitHub MCP for tickets; asks clarifying questions, then stops) |
+| Isolate | assigned branch (see `CLAUDE.md`) | n/a | Shimeles's `new-feature` not vendored (no licence); Claude Code manages worktrees |
+| Implement | `piv-implement`, Ponytail, layering rules in `CLAUDE.md` | Cole, Ponytail | **installed**; Ponytail is yours to install |
+| Validate | `piv-validate` | Cole | **installed**, wired to this repo's real commands and baseline |
+| Review | `ocr-review-loop` → `piv-review-changes` + `ocr delegate` | Cole, Alibaba | **installed** |
+| Fix | `piv-fix-review-findings` | Cole | **installed** |
+| Prove | `evidence-driven-testing` | Shimeles | deferred (no licence; needs Playwright/FFmpeg; wait for UI work) |
 | Write | `unslop` | Shimeles via Cursor | **installed** |
-| Commit | `piv-commit` | Cole | adopt; keep the attribution trailers |
-| PR | `piv-create-pr` | Cole | only when asked (project rule) |
+| Commit | `piv-commit` + `.claude/references/conventions.md` | Cole | **installed**; keeps attribution trailers |
+| PR | `piv-create-pr`, `piv-review-pr` | Cole | **installed**, GitHub MCP, **only when asked** |
 
 Skipped for now: `piv-run-full-loop` (chains steps without a human checkpoint), `worktree-create/merge` (we run one task at a time), `before-and-after` (see below), the signal-engine, second-brain and tutor skills (unrelated), and `greploop`, `greploop-apps` (Greptile).
 
@@ -58,33 +59,40 @@ There is no type checker or frontend test runner yet. Adding them is on the `pro
 
 ## 4. Code review: Alibaba Open Code Review replaces Greptile
 
-Install: `npm install -g @alibaba-group/open-code-review` (Git 2.41+, Node 18+). Configure with `ocr config provider` and `ocr config model`. Ollama support is unconfirmed; check before relying on it for private repos.
+Verified 2026-10-08 with `ocr` v1.12.12 (`npm install -g @alibaba-group/open-code-review`; Git 2.41+, Node 18+).
 
-Replacement for `greploop`, called `ocrloop` (to be written after one real run):
+**Delegation mode is the default here.** `ocr delegate preview` lists the reviewable files and `ocr delegate rule <files>`
+prints the review rules grouped by language (Python rules cover dead code, mutable defaults, edge cases, error handling,
+resource management, performance and more, each with "do not report" exceptions). No LLM key is needed: the agent applies
+the rules itself. That fits the privacy goal, because the diff goes nowhere. It skips Markdown and other unsupported types.
 
-1. `ocr review --from <base> --to HEAD --format json --output .ocr/result.json`
-2. Read findings. The JSON schema, severity fields and exit codes are not documented on the pages I read, so run it once here and write the gate against the real output.
-3. Fix actionable findings, rerun `piv-validate`, commit.
-4. Stop at zero findings at or above the chosen severity, or after 5 iterations.
+The loop is the `ocr-review-loop` skill: scope, review with a fresh-context agent, verify each finding is real, fix with tests,
+`piv-validate`, repeat until nothing at or above the threshold or 3 iterations. It replaces `greploop`: no polling, no
+`@greptile` comment, no GitHub dependency.
 
-No polling, no `@greptile` comment, no dependence on GitHub. `ocr` is a second opinion from a model that did not write the code, which is the part of Greptile we wanted. `.ocr/` goes in `.gitignore`.
+**API mode** (`ocr review --format json`, `ocr config provider`) runs ocr's own LLM review and can use Anthropic or
+OpenAI-compatible endpoints; Ollama support is unconfirmed. It sends the diff to that provider and its JSON schema and
+exit codes are undocumented where I looked, so nothing gates on it yet. Run it once before relying on it.
 
-`before-and-after` does not use Greptile, so it can stay in principle. It is PolyForm Shield licensed, uploads to the public host `0x0.st` by default (use a Gist or in-branch images for private work), and needs a global npm install. Defer until there is UI work to show.
+`before-and-after` does not use Greptile, so it can stay in principle. It is PolyForm Shield licensed, uploads to the
+public host `0x0.st` by default, and needs a global npm install. Deferred until there is UI work to show.
 
-## 5. Hooks (tranche 2, after I read each script)
+## 5. Hooks
 
-Cole's `hooks/` are the part I most want, because a rule asks and a hook guarantees. Not installed yet because I have read only `pre_tool_use_secrets.py` and the README, not the other five.
+Installed in `.claude/hooks/`, registered in `.claude/settings.json`, and tested in both directions (block and allow):
 
-| Hook | Use here |
+| Hook | What it does here |
 |---|---|
-| `pre_tool_use_secrets` | Yes. Blocks routes to `.env`, keys, and `rm -rf`. Matters more once provider API keys exist. |
-| `session_start_context` | Yes. Injects branch and recent commits. Pairs with `progress.md`. |
-| `post_tool_use_log` | Yes. Audit trail in `logs/` (gitignored). |
-| `stop_tests_must_pass` | **Not yet.** Our tests need Docker. A stop hook that cannot run the tests would trap the session. Enable once there is a test command that runs without Docker. |
-| `pre_tool_use_dependencies` | Later. Declare couplings such as migration and model files. |
-| `stop_notify` | Optional, desktop only. |
+| `pre_tool_use_secrets` | Blocks routes to `.env`, keys, `.ssh`, `.aws`, and recursive-force deletes. Allows `.env.example` and `.env.template` (local change). Matches text crudely, so a command that only mentions a blocked pattern is refused too. |
+| `session_start_context` | Injects branch, uncommitted files and recent commits. `progress.md` is read through `CLAUDE.md`, not injected. |
+| `post_tool_use_log` | Appends one JSON line per tool call to `logs/agent-actions.jsonl` (gitignored). |
 
-Hooks run through `uv`, so `uv` must be available. The secrets hook documents its own gaps (`@file` mentions bypass it; a written script can read the environment). Treat it as a guard rail, not a vault.
+They run with `python3` (standard library only), not `uv`. Known gaps from the hook author: `@file` mentions bypass tool hooks, and a
+written script can read the environment. Treat it as a guard rail, not a vault. All three fail open.
+
+Not installed: `stop_tests_must_pass` (needs a test command that runs without a Docker daemon; the native suite has 4 known
+environment failures, so it would trap sessions), `pre_tool_use_dependencies` (needs a coupling map we have not earned yet),
+`stop_notify` (desktop only).
 
 ## 6. How autonomous, and when
 
@@ -107,7 +115,10 @@ What we take from it now: the `MISSION.md` out-of-scope list (seven things a rea
 
 ## 7. Cloud-session adaptations
 
-This session has no `gh` CLI; GitHub goes through the GitHub MCP tools. Skills that call `gh` (`new-feature` scope check, `piv-create-pr`, `piv-review-pr`) need a note telling the agent to use the MCP equivalents. Project rules also override skills: no PR unless asked, work on the assigned branch, no force-push.
+- No `gh` CLI: the installed skills use the GitHub MCP tools (`ToolSearch` loads them if deferred).
+- Docker has a client but no daemon, so `piv-validate` runs the backend suite natively in a venv without torch (see the skill and the baseline in `progress.md`).
+- Project rules override skills: no PR unless asked, work on the assigned branch, no force-push.
+- New hooks and settings apply from the next session start.
 
 ## 8. What you run yourself
 
@@ -118,10 +129,4 @@ Plugin installs are interactive, so run these in Claude Code:
 /plugin install ponytail@ponytail
 ```
 
-Optionally, for the Shimeles skills with no vendorable licence:
-
-```
-npx skills add michaelshimeles/skills --skill new-feature code-structure evidence-driven-testing
-```
-
-Ponytail needs `node` on PATH. Its benchmark claims are the author's own.
+Ponytail needs `node` on PATH. Its benchmark claims are the author's own. Then restart the session and check `/skills`.

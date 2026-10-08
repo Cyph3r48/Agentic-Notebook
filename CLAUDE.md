@@ -21,6 +21,21 @@ Update `progress.md` (move items, add a Log line, write the next step). If behav
 - `frontend/src` — `pages`, `components`, `api`, `hooks`, `store`.
 - `docs/` — architecture, deployment, quick reference, workflow; `docs/archive/` is stale history.
 
+## Factory workflow (skills in `.claude/skills/`, details in `docs/dev-workflow.md`)
+
+`prime-*` → `piv-plan-implementation` → `piv-implement` → `piv-validate` → `ocr-review-loop` (uses `piv-review-changes`,
+`piv-fix-review-findings`) → `piv-commit` → `piv-create-pr` / `piv-review-pr` **only when asked**.
+Use `unslop` on anything a person will read. `piv-validate` always lists what it did not run; do not claim more than it proves.
+Hooks in `.claude/hooks/` block reads of secrets and recursive-force deletes, inject git state at session start, and log tool calls to `logs/`.
+Cloud sessions have no `gh` CLI; use the GitHub MCP tools. Skills never override the rules below.
+
+## Architecture layering
+
+Endpoints (`api/v1/endpoints`) validate input, check auth and ownership, call services, and map results to responses.
+Services own reusable mechanics (provider calls, vector search, document processing) with explicit inputs and structured
+results. Repositories own database access. Services do not reach into tables directly; endpoints do not branch on
+provider names. Extract shared logic only when two or more callers need it.
+
 ## Rules
 - Provider-specific code lives behind the provider interface; endpoints never branch on provider names.
 - Memory access goes through `MemoryProvider`; never query Qdrant directly from endpoints.

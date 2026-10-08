@@ -9,4 +9,5 @@ Shared instructions for any coding agent working in this repo (Claude Code, Code
 - **Privacy rule:** content flagged sensitive never goes to a disallowed provider.
 - **Git:** work on the branch you were given; small focused commits; no force-push; no PR unless asked.
 - **Secrets:** never commit keys or `.env`; use `.env.template` for new variables.
-- **Review:** run the code-review step in `docs/dev-workflow.md` before declaring work done.
+- **Review:** run the review loop in `docs/dev-workflow.md` (Open Code Review rules, `ocr delegate`) before declaring work done.
+- **Skills:** portable copies live in `.claude/skills/` (prime, piv-*, ocr-review-loop, unslop). Other agents: read the matching `SKILL.md` before that kind of work and say "use the X skill" instead of slash commands.

@@ -46,15 +46,28 @@ Fix these before building new features.
 
 ## Dev workflow setup (see `docs/dev-workflow.md`)
 
-- [x] `unslop` vendored into `.claude/skills/` (MIT)
-- [ ] You: install Ponytail (`/plugin marketplace add DietrichGebert/ponytail`, `/plugin install ponytail@ponytail`)
-- [ ] You: install Alibaba `ocr` and configure a provider; run it once so `ocrloop` can be written against real output
-- [ ] Read and vendor Cole's PIV skills (prime, plan, implement, validate, review-changes, commit); fill in `piv-validate`
-- [ ] Read and vendor hooks: secrets guard, session start, action log (stop-tests hook waits for a non-Docker test command)
+- [x] `unslop` vendored (MIT)
+- [x] Cole's skills vendored and adapted (MIT): `prime-codebase/backend/frontend`, `piv-plan-implementation`, `piv-implement`, `piv-validate`, `piv-review-changes`, `piv-fix-review-findings`, `piv-commit`, `piv-create-pr`, `piv-review-pr`
+- [x] `ocr-review-loop` written; Open Code Review (`ocr` v1.12.12) delegation mode verified: runs with no API key
+- [x] Hooks installed and tested both directions: secrets guard, session start, action log (`.claude/settings.json`)
+- [x] Conventions file for commit/PR (`.claude/references/conventions.md`)
+- [ ] You: install Ponytail (`/plugin marketplace add DietrichGebert/ponytail`, then `/plugin install ponytail@ponytail`)
+- [ ] You: restart the session so the new skills load; confirm with `/skills`
+- [ ] Decide whether `ocr` API mode is wanted (needs a provider; sends diffs to it) and run it once to learn the JSON schema
+- [ ] Stop-tests hook: needs a test command that runs without Docker (see baseline below), then add `stop_tests_must_pass.py`
 - [ ] Write `MISSION.md` with a seven-item out-of-scope list
-- [ ] Decide on `ocrloop` severity threshold
+- [ ] Read and consider `piv-investigate-issue`, `piv-implement-issue`, `hooks-create`, `skills-create` (not read yet)
+- [ ] The secrets hook matches text crudely: a command that merely mentions a blocked pattern (for example the words for a recursive-force delete) is refused. Rephrase, or tighten the regex if it gets in the way
+
+### Validation baseline (2026-10-08, native, no Docker daemon)
+
+- Backend tests: 51 passed, 14 skipped, 4 failed. Failures are `tests/test_auth_endpoints.py::{test_login_success, test_refresh_success, test_logout_success, test_login_invalid_credentials_payload_shape}`, which need the `postgres` host. Skips need Postgres/Redis.
+- `ruff check backend/app`: clean. `npm run lint` in `frontend/`: clean.
+- Not covered anywhere: type checking, frontend tests, integration paths, end-to-end journeys.
+- Cloud sessions have a Docker client but no daemon, so `make test-backend` cannot run there.
 
 ## Log
 
 - 2026-10-08 — Audited repo against the target spec; reorganized docs into `docs/`; drafted `spec.md`, `progress.md`, `CLAUDE.md`, `AGENTS.md`, `docs/dev-workflow.md`; rewrote README. Nothing run or tested yet.
 - 2026-10-08 — Reviewed three skill repos (Shimeles, Cole skills, Cole factory). Vendored `unslop`; rewrote `docs/dev-workflow.md` as the combined factory plan. Nothing else installed.
+- 2026-10-08 (later) — Read and vendored Cole's PIV skills and three hooks with adaptations; wrote `ocr-review-loop`; verified `ocr` delegation mode; recorded the native validation baseline. Ponytail and a session restart are still on you.

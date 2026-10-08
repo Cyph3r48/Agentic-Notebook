@@ -23,3 +23,7 @@ yarn-error.log*
 # Agent tooling
 .ocr/
 logs/
+.venv-be/
+.claude/reports/
+.claude/code-reviews/
+.claude/settings.local.json
