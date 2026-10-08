@@ -57,13 +57,34 @@ class Settings(BaseSettings):
     # Ollama (Primary)
     OLLAMA_URL: str = Field(default="http://host.docker.internal:11434")
     DEFAULT_MODEL: str = Field(default="llama3.2:3b-instruct-q4_K_M")
-    
-    # Claude API (Optional)
+    # A cold model load can take far longer than a normal request, so reads get a generous limit.
+    OLLAMA_CONNECT_TIMEOUT_SECONDS: float = Field(default=5.0)
+    OLLAMA_READ_TIMEOUT_SECONDS: float = Field(default=120.0)
+
+    # Claude API (Optional). Model IDs use hyphens and no date suffix, e.g. claude-sonnet-5-5.
     CLAUDE_API_KEY: str = Field(default="")
-    CLAUDE_MODEL: str = Field(default="claude-sonnet-4.6")
-    CLAUDE_SONNET_MODEL: str = Field(default="claude-sonnet-4.6")
-    CLAUDE_OPUS_MODEL: str = Field(default="claude-opus-4.6")
-    
+    CLAUDE_SONNET_MODEL: str = Field(default="claude-sonnet-5-5")
+    CLAUDE_OPUS_MODEL: str = Field(default="claude-opus-5-5")
+    CLAUDE_HAIKU_MODEL: str = Field(default="claude-haiku-5-5")
+    CLAUDE_DEFAULT_MODEL: str = Field(default="claude-sonnet-5-5")
+    CLAUDE_EFFORT: str = Field(default="medium")
+    CLAUDE_MAX_OUTPUT_TOKENS: int = Field(default=16000)
+    ANTHROPIC_REQUEST_TIMEOUT_SECONDS: float = Field(default=600.0)
+
+    # Chat history sent with each turn, and how long the live model list is cached.
+    LLM_HISTORY_MESSAGES: int = Field(default=12)
+    LLM_HISTORY_MAX_CHARS: int = Field(default=24000)
+    LLM_MODEL_LIST_TTL_SECONDS: int = Field(default=300)
+
+    @field_validator("CLAUDE_EFFORT")
+    @classmethod
+    def validate_claude_effort(cls, v: str) -> str:
+        allowed = {"low", "medium", "high", "xhigh", "max"}
+        value = v.strip().lower()
+        if value not in allowed:
+            raise ValueError(f"CLAUDE_EFFORT must be one of {sorted(allowed)}")
+        return value
+
     # ============================================
     # AUTHENTICATION
     # ============================================

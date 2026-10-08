@@ -42,7 +42,7 @@ Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` and change the passwor
 ### Providers
 
 - **Ollama:** set `OLLAMA_URL` (default `http://host.docker.internal:11434`) and pull a model, e.g. `ollama pull llama3.2:3b-instruct-q4_K_M`.
-- **Claude:** set `CLAUDE_API_KEY` in `.env`. Check the model IDs in `backend/app/core/config.py` against Anthropic's current model list; the defaults are suspect (see `progress.md`).
+- **Claude:** set `CLAUDE_API_KEY` in `.env`. The default models are `claude-sonnet-5-5`, `claude-opus-5-5` and `claude-haiku-5-5` (hyphens, no date suffix). With a key set, the model list also comes live from the Anthropic Models API. Tune `CLAUDE_EFFORT` (`low` to `max`) for speed versus depth.
 - **OpenAI:** not wired yet.
 
 Never commit `.env`. API credits and keys belong to the provider account that issued them.
