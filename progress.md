@@ -6,7 +6,9 @@ Update this file at the end of every working session: move items between section
 
 ## Where we left off
 
-2026-10-08: first factory lap done on branch `claude/festive-hamilton-e2cy6w`. Known bugs 1, 2 and 4 are fixed in code with tests (timeouts, Claude model IDs, conversation history). Not yet verified against live providers or under Docker. Next ticket: bug 3 (server-side provider keys and the Settings page). Plan for that ticket not written yet.
+2026-10-12: first factory lap done and pushed (bugs 1, 2, 4: timeouts, Claude model IDs, conversation history). Planning for the next ticket, bug 3 (server-side encrypted provider keys + Settings page), is paused at the question gate: six questions were put to the owner and are unanswered (scope, encryption and master key, server-key fallback, who may set the Ollama URL, per-user model list and health, moving keys out of browser storage). Defaults are recommended for all six. Once answered, write the plan to `.claude/plans/`, get approval, then implement.
+
+The owner deleted their local copy of the repo; the only copy is on GitHub, branch `claude/festive-hamilton-e2cy6w` (not merged into `master`, no PR opened). To work locally: clone, check out that branch, copy the env template to a local env file (git-ignored) and fill it in there. No key is ever committed; a scan of every commit on every branch found no key-shaped strings.
 
 ## Done (in the code today)
 
@@ -30,6 +32,9 @@ Fix these before building new features. Struck-through items are fixed in code (
 8. **Dependencies**: `openai` is in `requirements.txt` but unused (`anthropic` is now used and bumped to 1.12.1); `torch`, `transformers` and `sentence-transformers` are heavy and likely unnecessary since embeddings go through TEI. `hashlib-additional` looks unnecessary.
 9. **Defaults**: placeholder admin and DB passwords in `config.py`; random JWT secret per start invalidates sessions on restart.
 10. **Stale config naming**: README and `.env.template` describe a Claude-only fallback; no OpenAI settings exist.
+11. **Settings profile and password buttons are broken**: `Settings.jsx` calls `settingsAPI.updateProfile` and `settingsAPI.changePassword`, which are commented out in `frontend/src/api/settings.js`, and the backend has no endpoint for either (`auth.py` has only login, me, refresh, logout). Needs backend endpoints and the client functions.
+12. **Validation errors echo submitted values**: `validation_error_handler` in `backend/app/main.py` returns `exc.errors()`, which includes each field's `input`. A rejected request that carries an API key would send the key back. Must be sanitized before any key endpoint ships (part of the bug 3 ticket).
+13. **Model list and provider health need no login**: `GET /chat/models` and `GET /chat/providers/health` have no auth dependency. They must become authenticated and per-user once keys are per-user (part of the bug 3 ticket).
 
 ## Next (in order)
 
@@ -73,3 +78,4 @@ Fix these before building new features. Struck-through items are fixed in code (
 - 2026-10-08 — Reviewed three skill repos (Shimeles, Cole skills, Cole factory). Vendored `unslop`; rewrote `docs/dev-workflow.md` as the combined factory plan. Nothing else installed.
 - 2026-10-08 (later) — Read and vendored Cole's PIV skills and three hooks with adaptations; wrote `ocr-review-loop`; verified `ocr` delegation mode; recorded the native validation baseline. Ponytail and a session restart are still on you.
 - 2026-10-08 (LLM ticket) — Planned (`.claude/plans/fix-llm-timeouts-model-ids-history.md`) and implemented bugs 1, 2, 4. Anthropic calls now use the official SDK (`anthropic` 1.12.1, `pydantic` 2.13.5); Ollama has 5s/120s timeouts and retries only connection errors and 5xx; Claude IDs are hyphenated and configured once (compose, `.env.template`, README in sync), listed live from the Models API with a static fallback; both chat endpoints send up to 12 prior messages plus the conversation system prompt; refusals and truncation are reported in metadata; `effort` is sent only to models that accept it. Review found one real issue (effort on older models), fixed with tests. Mutation checks: 7 deliberate breaks, all caught. Left for a human: try a real Claude and Ollama conversation, and run `make test-backend` where Docker works.
+- 2026-10-12 — Started planning bug 3. Primed on models, migrations, security helpers, Settings page and API client. Found bugs 11 to 13 above. Paused at the question gate; nothing implemented. Also confirmed no secrets in git history.
