@@ -6,7 +6,7 @@ Update this file at the end of every working session: move items between section
 
 ## Where we left off
 
-2026-10-12: first factory lap done and pushed (bugs 1, 2, 4: timeouts, Claude model IDs, conversation history). Planning for the next ticket, bug 3 (server-side encrypted provider keys + Settings page), is paused at the question gate: six questions were put to the owner and are unanswered (scope, encryption and master key, server-key fallback, who may set the Ollama URL, per-user model list and health, moving keys out of browser storage). Defaults are recommended for all six. Once answered, write the plan to `.claude/plans/`, get approval, then implement.
+2026-10-12: first factory lap done and pushed (bugs 1, 2, 4: timeouts, Claude model IDs, conversation history). The next ticket, bug 3 (server-side encrypted provider keys + Settings page, also fixing bugs 12 and 13), is planned in `.claude/plans/server-side-provider-keys.md` using the owner's default answers. Nothing is implemented yet. Next step: owner approves the plan, then run `piv-implement` on it.
 
 The owner deleted their local copy of the repo; the only copy is on GitHub, branch `claude/festive-hamilton-e2cy6w` (not merged into `master`, no PR opened). To work locally: clone, check out that branch, copy the env template to a local env file (git-ignored) and fill it in there. No key is ever committed; a scan of every commit on every branch found no key-shaped strings.
 
@@ -38,7 +38,7 @@ Fix these before building new features. Struck-through items are fixed in code (
 
 ## Next (in order)
 
-1. [ ] Review and approve `spec.md`; answer its open questions.
+1. [ ] Review and approve `spec.md`; answer its open questions. Approve `.claude/plans/server-side-provider-keys.md` so implementation can start.
 2. [x] Fix known bugs 1, 2, 4 (timeouts, model IDs, history) with tests. [ ] Bug 3: server-side encrypted provider keys + Settings page (next ticket: run `piv-plan-implementation`).
 3. [ ] `LLMProvider` interface + registry; port Anthropic and Ollama; add OpenAI; Ollama cloud.
 4. [ ] Settings page: provider/model picker, server-side encrypted keys, test connection.
@@ -79,3 +79,4 @@ Fix these before building new features. Struck-through items are fixed in code (
 - 2026-10-08 (later) — Read and vendored Cole's PIV skills and three hooks with adaptations; wrote `ocr-review-loop`; verified `ocr` delegation mode; recorded the native validation baseline. Ponytail and a session restart are still on you.
 - 2026-10-08 (LLM ticket) — Planned (`.claude/plans/fix-llm-timeouts-model-ids-history.md`) and implemented bugs 1, 2, 4. Anthropic calls now use the official SDK (`anthropic` 1.12.1, `pydantic` 2.13.5); Ollama has 5s/120s timeouts and retries only connection errors and 5xx; Claude IDs are hyphenated and configured once (compose, `.env.template`, README in sync), listed live from the Models API with a static fallback; both chat endpoints send up to 12 prior messages plus the conversation system prompt; refusals and truncation are reported in metadata; `effort` is sent only to models that accept it. Review found one real issue (effort on older models), fixed with tests. Mutation checks: 7 deliberate breaks, all caught. Left for a human: try a real Claude and Ollama conversation, and run `make test-backend` where Docker works.
 - 2026-10-12 — Started planning bug 3. Primed on models, migrations, security helpers, Settings page and API client. Found bugs 11 to 13 above. Paused at the question gate; nothing implemented. Also confirmed no secrets in git history.
+- 2026-10-12 (later) — Owner accepted all six defaults. Wrote `.claude/plans/server-side-provider-keys.md` (Fernet-encrypted per-user keys, master key only in the local env file, per-credential caches and breakers, authenticated model list and health, sanitized 422 handler, Settings page rewrite). Checked Ollama Cloud auth in the docs (Bearer key on `https://ollama.com/api`, hosted model names without the `-cloud` suffix). Opened a PR from this branch into `master` for review; not merged.
