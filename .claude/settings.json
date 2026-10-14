@@ -4,7 +4,11 @@
       {
         "matcher": "startup|resume|clear",
         "hooks": [
-          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_start_context.py\"", "timeout": 20 }
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/session_start_context.py\"",
+            "timeout": 20
+          }
         ]
       }
     ],
@@ -12,7 +16,12 @@
       {
         "matcher": "Read|Edit|MultiEdit|Write|NotebookEdit|Bash|PowerShell|Grep|Glob",
         "hooks": [
-          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_tool_use_secrets.py\"", "timeout": 15, "statusMessage": "Checking guardrails..." }
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/pre_tool_use_secrets.py\"",
+            "timeout": 15,
+            "statusMessage": "Checking guardrails..."
+          }
         ]
       }
     ],
@@ -20,7 +29,12 @@
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_tool_use_log.py\"", "timeout": 15, "async": true }
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_tool_use_log.py\"",
+            "timeout": 15,
+            "async": true
+          }
         ]
       }
     ],
@@ -28,9 +42,27 @@
       {
         "matcher": "*",
         "hooks": [
-          { "type": "command", "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_tool_use_log.py\"", "timeout": 15, "async": true }
+          {
+            "type": "command",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/.claude/hooks/post_tool_use_log.py\"",
+            "timeout": 15,
+            "async": true
+          }
         ]
       }
     ]
+  },
+  "extraKnownMarketplaces": {
+    "ponytail": {
+      "source": {
+        "source": "github",
+        "repo": "DietrichGebert/ponytail",
+        "ref": "v5.2.0"
+      },
+      "autoUpdate": false
+    }
+  },
+  "enabledPlugins": {
+    "ponytail@ponytail": true
   }
 }

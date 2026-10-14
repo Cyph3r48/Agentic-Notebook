@@ -120,13 +120,17 @@ What we take from it now: the `MISSION.md` out-of-scope list (seven things a rea
 - Project rules override skills: no PR unless asked, work on the assigned branch, no force-push.
 - New hooks and settings apply from the next session start.
 
-## 8. What you run yourself
+## 8. Ponytail (enabled in project settings)
 
-Plugin installs are interactive, so run these in Claude Code:
+`.claude/settings.json` declares the marketplace and enables the plugin, so Claude Code offers it when the project is opened:
 
 ```
-/plugin marketplace add DietrichGebert/ponytail
-/plugin install ponytail@ponytail
+"extraKnownMarketplaces": { "ponytail": { "source": { "source": "github", "repo": "DietrichGebert/ponytail", "ref": "v5.2.0" }, "autoUpdate": false } },
+"enabledPlugins": { "ponytail@ponytail": true }
 ```
 
-Ponytail needs `node` on PATH. Its benchmark claims are the author's own. Then restart the session and check `/skills`.
+- **Pinned:** tag `v5.2.0` is commit `2961b52`, the one whose hooks were read on 2026-10-13. `autoUpdate` is off, so a later change in the Ponytail repo cannot reach this project until someone bumps the tag after reading the diff.
+- **What it runs:** three Node hooks (session start, subagent start, prompt submit). No network code. A read-only `git ls-files` builds a short repo map, and small mode and statusline files are written under the Claude config directory (outside the repo).
+- **Needs:** `node` on PATH. You will be asked once to trust the plugin. Its benchmark claims are the author's own.
+- **To update:** read the new release's hooks, change `ref`, commit.
+- **To turn it off locally:** set `"ponytail@ponytail": false` in `.claude/settings.local.json` (git-ignored).

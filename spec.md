@@ -39,7 +39,7 @@ Non-goals (v1)
 ```
 React (Vite) ── nginx ── FastAPI backend ──┬── ProviderRegistry ── anthropic | openai | ollama
                                            ├── MemoryProvider ──── builtin | smc | http/mcp
-                                           ├── DecisionService ─── laya sidecar (Node, ONNX)
+                                           ├── DecisionService ─── Laya service (remote or local)
                                            ├── Postgres  (users, conversations, chunks, audit)
                                            ├── Redis     (sessions, rate limits)
                                            └── Qdrant + TEI embeddings (semantic search)
@@ -85,7 +85,7 @@ code is the starting point for the adapters: `StreamOutcome` already carries sto
 
 Rules: Laya is a gate, not a judge. Every decision records its label, probability and latency in the audit log. Below a configurable confidence threshold the system takes the safe default in the last column or escalates to the LLM. Regex checks stay as a cheap pre-filter.
 
-Laya runs as a **Node sidecar container** (ONNX Runtime, `@receptron/laya`). Roughly 1.7 GB of weights and ~2 GB RAM. Inputs are truncated (512 tokens of state; 192 per option set), so the backend sends compact summaries, not whole documents. Latency and accuracy must be measured on this app's own data before any default is trusted; the published figures are the vendor's.
+Laya is reached over the network at `LAYA_URL` (optional `LAYA_TOKEN`). The owner's instance already runs on their VPS, so no container is added to this repo's compose file. For other installs, Laya can be run anywhere that has about 1.7 GB of weights and ~2 GB RAM (the `@receptron/laya` package, ONNX Runtime, Node); an optional compose profile for that can come later. Because message text is sent to this service, it must be reachable only over an authenticated, encrypted channel (HTTPS plus a token, or a private network), and `DecisionService` fails safe if it is unreachable (retrieve, treat as sensitive, use the selected model). Inputs are truncated (512 tokens of state; 192 per option set), so the backend sends compact summaries, not whole documents. Latency and accuracy must be measured on this app's own data before any default is trusted; the published figures are the vendor's.
 
 ### 3.4 Agent loop (planned)
 
@@ -134,5 +134,5 @@ Out-of-the-box requirements for `builtin` (planned fixes in `progress.md`): vect
 
 1. How does the SMC expose itself (HTTP, MCP, or Postgres tables)?
 2. Ollama cloud: confirm endpoint, auth header and model naming before building the adapter.
-3. Laya hosting: confirm the sidecar fits the target 4 GB VPS, or document a larger minimum.
+3. Laya on the VPS: what does it expose (HTTP API shape and port, Jev-compatible `system_one`, auth, TLS, who can reach it)? Is it reachable from where this app runs?
 4. Which "Open Code Review" project is the standard (see `docs/dev-workflow.md`).

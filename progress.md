@@ -43,7 +43,7 @@ Fix these before building new features. Struck-through items are fixed in code (
 3. [ ] `LLMProvider` interface + registry; port Anthropic and Ollama; add OpenAI; Ollama cloud.
 4. [ ] Settings page: provider/model picker, server-side encrypted keys, test connection.
 5. [ ] `MemoryProvider` interface; wrap current Postgres/Qdrant code as `builtin`; vector path default-on with real health check and UI indicator.
-6. [ ] Laya sidecar container + `DecisionService`; first decisions: retrieval gate, sensitivity gate; measure latency/accuracy on real data.
+6. [ ] `DecisionService` client for the Laya service that already runs on the owner's VPS (no sidecar needed; see `spec.md` 3.3 and its open questions); first decisions: retrieval gate, sensitivity gate; measure latency/accuracy on real data.
 7. [ ] Wire all five SMC layers into the chat and ingest paths with tests.
 8. [ ] Model routing and agent loop.
 9. [ ] SMC adapter (`MEMORY_BACKEND=smc`) once its access method is known.
@@ -56,7 +56,7 @@ Fix these before building new features. Struck-through items are fixed in code (
 - [x] `ocr-review-loop` written; Open Code Review (`ocr` v1.12.12) delegation mode verified: runs with no API key
 - [x] Hooks installed and tested both directions: secrets guard, session start, action log (`.claude/settings.json`)
 - [x] Conventions file for commit/PR (`.claude/references/conventions.md`)
-- [ ] You: install Ponytail (`/plugin marketplace add DietrichGebert/ponytail`, then `/plugin install ponytail@ponytail`)
+- [x] Ponytail enabled in `.claude/settings.json`, pinned to tag `v5.2.0` (commit `2961b52`, hooks read first). You will be asked to trust it the next time the project opens locally; needs `node`
 - [x] Session restarted; skills loaded and used
 - [ ] Decide whether `ocr` API mode is wanted (needs a provider; sends diffs to it) and run it once to learn the JSON schema
 - [ ] Stop-tests hook: needs a test command that runs without Docker (see baseline below), then add `stop_tests_must_pass.py`
