@@ -6,7 +6,9 @@ Update this file at the end of every working session: move items between section
 
 ## Where we left off
 
-2026-10-12: first factory lap done and pushed (bugs 1, 2, 4: timeouts, Claude model IDs, conversation history). The next ticket, bug 3 (server-side encrypted provider keys + Settings page, also fixing bugs 12 and 13), is planned in `.claude/plans/server-side-provider-keys.md` using the owner's default answers. Nothing is implemented yet. Next step: owner approves the plan, then run `piv-implement` on it.
+2026-10-14: bug 3 ticket (server-side encrypted provider keys + Settings page, also bugs 12 and 13) implemented on this branch, unit-tested only. Plan: `.claude/plans/server-side-provider-keys.md`. Owner still has to: clone, generate `SECRETS_ENCRYPTION_KEY` into the local env file, run with Docker (migration `20261012_000003`), save a key in Settings, press Test, and chat. Next ticket: `LLMProvider` interface + OpenAI adapter. Laya runs on the owner's VPS already; the `DecisionService` client needs its API shape, port, auth and TLS details.
+
+Pre-existing, not fixed: `npm run build` fails in `frontend/src/index.css` (`bg-dark-elevated/40` does not exist in the Tailwind config). Lint passes and the page compiles with esbuild.
 
 The owner deleted their local copy of the repo; the only copy is on GitHub, branch `claude/festive-hamilton-e2cy6w` (not merged into `master`, no PR opened). To work locally: clone, check out that branch, copy the env template to a local env file (git-ignored) and fill it in there. No key is ever committed; a scan of every commit on every branch found no key-shaped strings.
 
@@ -24,7 +26,7 @@ Fix these before building new features. Struck-through items are fixed in code (
 
 1. ~~**LLM timeouts**~~ FIXED: `llm_service.py` uses `timeout=2.0` for non-streaming Ollama and Anthropic calls, so real generations time out and fall back to canned text. Streaming uses 10s, also short.
 2. ~~**Claude model IDs**~~ FIXED: `config.py` defaults to `claude-sonnet-4.6` / `claude-opus-4.6` (dots); Anthropic IDs use hyphens. `.env.template` uses a different ID again. `_resolve_model` only allows those two values. Verify current IDs against the Anthropic docs.
-3. **Keys never reach the backend**: Settings stores Claude/Ollama keys in browser `localStorage`; the backend reads `CLAUDE_API_KEY` from env. Verify end to end, then replace with server-side encrypted storage.
+3. ~~**Keys never reach the backend**~~ FIXED (unit tests only): keys are saved per user, Fernet-encrypted, through `/settings/providers`; Settings page rewritten; browser copies can be moved to the server.
 4. ~~**No conversation history**~~ FIXED is sent to the model; each turn is a single prompt.
 5. **Security layers unwired**: `pi_guard_check`, `check_tool_permission`, `audit_log`, `verify_integrity` are never called on request paths.
 6. **PI Guard threshold**: score = matches / 16 patterns, passes if < 0.1, so one match (0.0625) passes.
@@ -33,15 +35,15 @@ Fix these before building new features. Struck-through items are fixed in code (
 9. **Defaults**: placeholder admin and DB passwords in `config.py`; random JWT secret per start invalidates sessions on restart.
 10. **Stale config naming**: README and `.env.template` describe a Claude-only fallback; no OpenAI settings exist.
 11. **Settings profile and password buttons are broken**: `Settings.jsx` calls `settingsAPI.updateProfile` and `settingsAPI.changePassword`, which are commented out in `frontend/src/api/settings.js`, and the backend has no endpoint for either (`auth.py` has only login, me, refresh, logout). Needs backend endpoints and the client functions.
-12. **Validation errors echo submitted values**: `validation_error_handler` in `backend/app/main.py` returns `exc.errors()`, which includes each field's `input`. A rejected request that carries an API key would send the key back. Must be sanitized before any key endpoint ships (part of the bug 3 ticket).
-13. **Model list and provider health need no login**: `GET /chat/models` and `GET /chat/providers/health` have no auth dependency. They must become authenticated and per-user once keys are per-user (part of the bug 3 ticket).
+12. ~~**Validation errors echo submitted values**~~ FIXED (422 handler drops `input`, `ctx`, `url`): `validation_error_handler` in `backend/app/main.py` returns `exc.errors()`, which includes each field's `input`. A rejected request that carries an API key would send the key back. Must be sanitized before any key endpoint ships (part of the bug 3 ticket).
+13. ~~**Model list and provider health need no login**~~ FIXED (authenticated, per user): `GET /chat/models` and `GET /chat/providers/health` have no auth dependency. They must become authenticated and per-user once keys are per-user (part of the bug 3 ticket).
 
 ## Next (in order)
 
 1. [ ] Review and approve `spec.md`; answer its open questions. Approve `.claude/plans/server-side-provider-keys.md` so implementation can start.
-2. [x] Fix known bugs 1, 2, 4 (timeouts, model IDs, history) with tests. [ ] Bug 3: server-side encrypted provider keys + Settings page (next ticket: run `piv-plan-implementation`).
+2. [x] Fix known bugs 1, 2, 4 (timeouts, model IDs, history) with tests. [x] Bug 3 (plus 12, 13): server-side encrypted provider keys + Settings page; awaiting owner's manual test.
 3. [ ] `LLMProvider` interface + registry; port Anthropic and Ollama; add OpenAI; Ollama cloud.
-4. [ ] Settings page: provider/model picker, server-side encrypted keys, test connection.
+4. [~] Settings page: server-side encrypted keys and Test done; provider/model picker still open.
 5. [ ] `MemoryProvider` interface; wrap current Postgres/Qdrant code as `builtin`; vector path default-on with real health check and UI indicator.
 6. [ ] `DecisionService` client for the Laya service that already runs on the owner's VPS (no sidecar needed; see `spec.md` 3.3 and its open questions); first decisions: retrieval gate, sensitivity gate; measure latency/accuracy on real data.
 7. [ ] Wire all five SMC layers into the chat and ingest paths with tests.
@@ -66,6 +68,8 @@ Fix these before building new features. Struck-through items are fixed in code (
 
 ### Validation baseline (native, no Docker daemon)
 
+- 2026-10-14, after the keys ticket: **134 passed, 15 skipped, 4 failed** (same 4 env failures). Not run: Docker integration (`RUN_DB_INTEGRATION_TESTS=1`), live Claude/Ollama calls, type checking, frontend tests, `npm run build` (fails before this change).
+
 - 2026-10-08, after the LLM ticket: **87 passed, 14 skipped, 4 failed**. The same 4 failures as before (`tests/test_auth_endpoints.py::{test_login_success, test_refresh_success, test_logout_success, test_login_invalid_credentials_payload_shape}`, they need the `postgres` host); 36 tests added (`test_llm_service.py`, `test_chat_history.py`). Skips need Postgres/Redis.
 - Before the ticket: 51 passed, 14 skipped, 4 failed.
 - `ruff check backend/app backend/tests`: clean. `npm run lint` in `frontend/`: clean.
@@ -80,3 +84,4 @@ Fix these before building new features. Struck-through items are fixed in code (
 - 2026-10-08 (LLM ticket) — Planned (`.claude/plans/fix-llm-timeouts-model-ids-history.md`) and implemented bugs 1, 2, 4. Anthropic calls now use the official SDK (`anthropic` 1.12.1, `pydantic` 2.13.5); Ollama has 5s/120s timeouts and retries only connection errors and 5xx; Claude IDs are hyphenated and configured once (compose, `.env.template`, README in sync), listed live from the Models API with a static fallback; both chat endpoints send up to 12 prior messages plus the conversation system prompt; refusals and truncation are reported in metadata; `effort` is sent only to models that accept it. Review found one real issue (effort on older models), fixed with tests. Mutation checks: 7 deliberate breaks, all caught. Left for a human: try a real Claude and Ollama conversation, and run `make test-backend` where Docker works.
 - 2026-10-12 — Started planning bug 3. Primed on models, migrations, security helpers, Settings page and API client. Found bugs 11 to 13 above. Paused at the question gate; nothing implemented. Also confirmed no secrets in git history.
 - 2026-10-12 (later) — Owner accepted all six defaults. Wrote `.claude/plans/server-side-provider-keys.md` (Fernet-encrypted per-user keys, master key only in the local env file, per-credential caches and breakers, authenticated model list and health, sanitized 422 handler, Settings page rewrite). Checked Ollama Cloud auth in the docs (Bearer key on `https://ollama.com/api`, hosted model names without the `-cloud` suffix). Opened a PR from this branch into `master` for review; not merged.
+- 2026-10-14 — Implemented the keys ticket: `SecretBox` (Fernet, owner-bound), `provider_credentials` table and migration, credential repository and service, `/settings/providers` (list, save, delete, test), per-credential breakers and model caches, authenticated models and health, sanitized 422, `ProviderKeyFields` on the Settings page with a Move-to-server banner. Mutation checks: 9 breaks, all caught. Review loop and commit follow.

@@ -10,7 +10,7 @@ import pytest
 
 from app.core.config import settings
 from app.services import llm_service as llm_module
-from app.services.llm_service import REFUSAL_TEXT, LLMService, StreamOutcome
+from app.services.llm_service import REFUSAL_TEXT, LLMService, ProviderCredentials, StreamOutcome
 
 
 @pytest.fixture(autouse=True)
@@ -545,3 +545,156 @@ async def test_list_models_includes_names_for_both_providers(monkeypatch):
     assert models["ollama"] == [{"id": "llama3.2:3b", "name": "llama3.2:3b", "provider": "ollama"}]
     assert {m["provider"] for m in models["anthropic"]} == {"anthropic"}
     assert all(m["name"] for m in models["anthropic"])
+
+
+# ---------------------------------------------------------------- per-user credentials
+
+
+def _user_creds(key=None, base_url=None, owner="u1"):
+    return ProviderCredentials(api_key=key, base_url=base_url, source="user", owner=owner)
+
+
+def test_anthropic_client_prefers_the_users_key_over_the_server_key(monkeypatch):
+    monkeypatch.setattr(settings, "CLAUDE_API_KEY", "sk-server-key-2222")
+    assert LLMService._anthropic_client(credentials=_user_creds("sk-user-key-1111")).api_key == "sk-user-key-1111"
+    assert LLMService._anthropic_client().api_key == "sk-server-key-2222"
+
+
+def test_anthropic_client_without_any_key_fails_clearly():
+    with pytest.raises(RuntimeError, match="No Claude API key"):
+        LLMService._anthropic_client()
+
+
+@pytest.mark.asyncio
+async def test_the_users_credentials_reach_the_client_for_the_catalog_and_the_call(monkeypatch):
+    seen = []
+    fake = _FakeAnthropic(messages=_FakeMessages(_message()))
+
+    def factory(cls, *, credentials=None, **kwargs):
+        seen.append(credentials)
+        return fake
+
+    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(factory))
+    credentials = _user_creds("sk-user-key-1111")
+
+    await LLMService.generate_chat_reply(
+        model="claude-sonnet-5-5", user_message="x", context_lines=[], credentials=credentials
+    )
+
+    assert len(seen) == 2 and all(item is credentials for item in seen)
+
+
+@pytest.mark.asyncio
+async def test_each_key_gets_its_own_model_catalog(monkeypatch):
+    lists = {"sk-key-aaaa-1111": ["claude-sonnet-5-5"], "sk-key-bbbb-2222": ["claude-opus-5-5", "claude-haiku-5-5"]}
+
+    def factory(cls, *, credentials=None, **kwargs):
+        return _FakeAnthropic(models=_FakeModels(lists[credentials.api_key]))
+
+    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(factory))
+    first, second = _user_creds("sk-key-aaaa-1111"), _user_creds("sk-key-bbbb-2222")
+
+    ids_a = [e["id"] for e in await LLMService.claude_model_catalog(first)]
+    ids_b = [e["id"] for e in await LLMService.claude_model_catalog(second)]
+
+    assert ids_a == ["claude-sonnet-5-5"] and ids_b == ["claude-opus-5-5", "claude-haiku-5-5"]
+    assert [e["id"] for e in await LLMService.claude_model_catalog(first)] == ids_a  # still A's list from cache
+
+
+@pytest.mark.asyncio
+async def test_one_users_failures_do_not_open_another_users_circuit(monkeypatch):
+    broken = _FakeAnthropic(messages=_FakeMessages(error=_AuthError()))
+    working = _FakeAnthropic(messages=_FakeMessages(_message(text="fine")))
+
+    def factory(cls, *, credentials=None, **kwargs):
+        return broken if credentials.api_key == "sk-bad-key-0000" else working
+
+    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(factory))
+    bad, good = _user_creds("sk-bad-key-0000", owner="a"), _user_creds("sk-good-key-9999", owner="b")
+
+    for _ in range(3):
+        await LLMService.generate_chat_reply(model="claude-sonnet-5-5", user_message="x", context_lines=[], credentials=bad)
+    _, bad_result = await LLMService.generate_chat_reply(model="claude-sonnet-5-5", user_message="x", context_lines=[], credentials=bad)
+    text, good_result = await LLMService.generate_chat_reply(model="claude-sonnet-5-5", user_message="x", context_lines=[], credentials=good)
+
+    assert bad_result["error_type"] == "provider_circuit_open"
+    assert text == "fine" and "error_type" not in good_result
+    assert LLMService._failure_count.get("anthropic", 0) == 0  # the server-wide circuit was never touched
+
+
+@pytest.mark.asyncio
+async def test_ollama_uses_the_users_url_and_bearer_key(monkeypatch):
+    calls = _install_ollama(monkeypatch, lambda request, n: _ollama_ok())
+
+    await LLMService.generate_chat_reply(
+        model="gpt-oss:120b",
+        user_message="hi",
+        context_lines=[],
+        credentials=_user_creds("ollama-key-3333", base_url="https://ollama.com"),
+    )
+
+    assert str(calls[0].url) == "https://ollama.com/api/chat"
+    assert calls[0].headers["authorization"] == "Bearer ollama-key-3333"
+
+
+@pytest.mark.asyncio
+async def test_ollama_without_credentials_uses_the_server_url_and_sends_no_auth(monkeypatch):
+    calls = _install_ollama(monkeypatch, lambda request, n: _ollama_ok())
+    await LLMService.generate_chat_reply(model="llama3.2", user_message="hi", context_lines=[])
+    assert str(calls[0].url) == f"{settings.OLLAMA_URL.rstrip('/')}/api/chat"
+    assert "authorization" not in calls[0].headers
+
+
+@pytest.mark.asyncio
+async def test_ollama_401_is_reported_as_an_auth_error(monkeypatch):
+    _install_ollama(monkeypatch, lambda request, n: httpx.Response(401))
+    _, metadata = await LLMService.generate_chat_reply(
+        model="llama3.2", user_message="hi", context_lines=[], credentials=_user_creds("ollama-key-3333")
+    )
+    assert metadata["error_type"] == "provider_auth_error"
+
+
+def _awaitable_models(result=None, error=None):
+    async def list_(**kwargs):
+        if error is not None:
+            raise error
+        return result
+
+    return SimpleNamespace(list=list_)
+
+
+@pytest.mark.asyncio
+async def test_connection_test_for_claude(monkeypatch):
+    ok = _FakeAnthropic(models=_awaitable_models(result=SimpleNamespace()))
+    _use_fake_anthropic(monkeypatch, ok)
+    assert (await LLMService.test_connection("anthropic", _user_creds("sk-user-key-1111")))["ok"] is True
+
+    bad = _FakeAnthropic(models=_awaitable_models(error=_AuthError()))
+    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(lambda cls, **kwargs: bad))
+    result = await LLMService.test_connection("anthropic", _user_creds("sk-user-key-1111"))
+    assert result == {"ok": False, "error_type": "provider_auth_error", "detail": "The provider rejected the key."}
+    assert "sk-user-key-1111" not in str(result)
+
+
+@pytest.mark.asyncio
+async def test_connection_test_without_a_claude_key_or_for_openai():
+    assert (await LLMService.test_connection("anthropic", None))["error_type"] == "not_configured"
+    assert (await LLMService.test_connection("openai", _user_creds("sk-openai-test-9999")))["error_type"] == "provider_not_supported"
+
+
+@pytest.mark.asyncio
+async def test_connection_test_for_ollama(monkeypatch):
+    real_client = httpx.AsyncClient
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        return httpx.Response(401) if request.headers.get("authorization") == "Bearer wrong-key-0000" else httpx.Response(200, json={"models": []})
+
+    transport = httpx.MockTransport(handler)
+    monkeypatch.setattr(llm_module.httpx, "AsyncClient", lambda **kwargs: real_client(transport=transport))
+
+    assert (await LLMService.test_connection("ollama", _user_creds("right-key-1111", base_url="https://ollama.com")))["ok"] is True
+    assert str(seen[0].url) == "https://ollama.com/api/tags"
+    failed = await LLMService.test_connection("ollama", _user_creds("wrong-key-0000"))
+    assert failed["error_type"] == "provider_auth_error" and "wrong-key-0000" not in str(failed)

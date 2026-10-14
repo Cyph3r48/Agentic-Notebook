@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { motion } from 'framer-motion'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { 
   User, 
   Lock, 
@@ -21,6 +21,7 @@ import { useAuth } from '../hooks/useAuth'
 import { useModels } from '../hooks/useChatModels'
 import { useProviderHealth } from '../hooks/useChatModels'
 import { settingsAPI } from '../api/settings'
+import { ProviderKeyFields } from '../components/ProviderKeyFields'
 
 // Settings section component
 const SettingsSection = ({ title, description, icon: Icon, children }) => (
@@ -93,15 +94,17 @@ export const Settings = () => {
     confirmPassword: '',
   })
 
-  const [ollamaForm, setOllamaForm] = useState({
-    url: localStorage.getItem('ollama_url') || 'http://localhost:11434',
-    apiKey: localStorage.getItem('ollama_api_key') || '',
-    models: (localStorage.getItem('ollama_models') || 'gemma3:4b').split(','),
+  const queryClient = useQueryClient()
+  const { data: providerList } = useQuery({
+    queryKey: ['settings-providers'],
+    queryFn: settingsAPI.listProviders,
+    staleTime: 30 * 1000,
   })
-
-  const [claudeForm, setClaudeForm] = useState({
-    apiKey: localStorage.getItem('claude_api_key') || '',
-  })
+  const providerStatus = (name) => providerList?.find((p) => p.provider === name)
+  const refreshProviders = () => {
+    // Models and health depend on the saved key, so refresh everything.
+    queryClient.invalidateQueries()
+  }
 
   // Apply theme to DOM
   const applyTheme = (themeValue) => {
@@ -176,26 +179,6 @@ export const Settings = () => {
     } finally {
       setIsSaving(false)
     }
-  }
-
-  const handleSaveOllama = () => {
-    if (!ollamaForm.url) {
-      toast.error('Ollama URL is required')
-      return
-    }
-    localStorage.setItem('ollama_url', ollamaForm.url)
-    localStorage.setItem('ollama_api_key', ollamaForm.apiKey)
-    localStorage.setItem('ollama_models', ollamaForm.models.join(','))
-    toast.success('Ollama settings saved')
-  }
-
-  const handleSaveClaude = () => {
-    if (!claudeForm.apiKey) {
-      toast.error('Claude API key is required')
-      return
-    }
-    localStorage.setItem('claude_api_key', claudeForm.apiKey)
-    toast.success('Claude API key saved')
   }
 
   return (
@@ -347,51 +330,14 @@ export const Settings = () => {
                 )}
               </div>
 
-              {/* Ollama Configuration Fields */}
-              <div className="space-y-4 mb-4 p-3 rounded-lg bg-white/5">
-                <FormField label="Ollama API URL">
-                  <input
-                    type="text"
-                    value={ollamaForm.url}
-                    onChange={(e) => setOllamaForm({ ...ollamaForm, url: e.target.value })}
-                    className="glass-input w-full"
-                    placeholder="http://localhost:11434"
-                  />
-                </FormField>
-
-                <FormField label="API Key (Optional)">
-                  <div className="relative">
-                    <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
-                    <input
-                      type="password"
-                      value={ollamaForm.apiKey}
-                      onChange={(e) => setOllamaForm({ ...ollamaForm, apiKey: e.target.value })}
-                      className="glass-input w-full pl-10"
-                      placeholder="Your Ollama API key (if required)"
-                    />
-                  </div>
-                </FormField>
-
-                <FormField label="Default Models (comma-separated)">
-                  <input
-                    type="text"
-                    value={ollamaForm.models.join(', ')}
-                    onChange={(e) => setOllamaForm({
-                      ...ollamaForm,
-                      models: e.target.value.split(',').map(m => m.trim()).filter(Boolean)
-                    })}
-                    className="glass-input w-full"
-                    placeholder="gemma3:4b, kimi-k2.5:cloud"
-                  />
-                </FormField>
-
-                <button
-                  onClick={handleSaveOllama}
-                  className="glass-button-primary px-4 py-2 flex items-center gap-2 w-full justify-center"
-                >
-                  <Save className="w-4 h-4" />
-                  Save Ollama Settings
-                </button>
+              <div className="mb-4">
+                <ProviderKeyFields
+                  provider="ollama"
+                  status={providerStatus('ollama')}
+                  isAdmin={user?.role === 'admin'}
+                  placeholder="Ollama Cloud key (only if you use ollama.com)"
+                  onChanged={refreshProviders}
+                />
               </div>
 
               {!isLoadingHealth && !(health?.ollama?.healthy ?? health?.ollama?.ok) && (
@@ -464,39 +410,14 @@ export const Settings = () => {
                 )}
               </div>
 
-              <div className="space-y-4 p-3 rounded-lg bg-white/5">
-                <FormField label="API Key">
-                  <div className="relative">
-                    <Key className="absolute left-3 top-1/2 -translate-y-1/2 w-5 h-5 text-gray-500" />
-                    <input
-                      type="password"
-                      value={claudeForm.apiKey}
-                      onChange={(e) => setClaudeForm({ ...claudeForm, apiKey: e.target.value })}
-                      placeholder="sk-ant-..."
-                      className="glass-input w-full pl-10"
-                    />
-                  </div>
-                  <p className="mt-1 text-xs text-gray-500">
-                    Your API key is stored securely in your browser.
-                    <a
-                      href="https://console.anthropic.com"
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-400 hover:text-blue-300 inline-flex items-center gap-1"
-                    >
-                      Get API key <ExternalLink className="w-3 h-3" />
-                    </a>
-                  </p>
-                </FormField>
-
-                <button
-                  onClick={handleSaveClaude}
-                  className="glass-button-primary px-4 py-2 flex items-center gap-2 w-full justify-center"
-                >
-                  <Save className="w-4 h-4" />
-                  Save Claude API Key
-                </button>
-              </div>
+              <ProviderKeyFields
+                provider="anthropic"
+                status={providerStatus('anthropic')}
+                placeholder="sk-ant-..."
+                helpUrl="https://console.anthropic.com"
+                helpLabel="Get API key"
+                onChanged={refreshProviders}
+              />
             </div>
           </div>
         </SettingsSection>

@@ -63,11 +63,11 @@ code is the starting point for the adapters: `StreamOutcome` already carries sto
 `error_type` values (`provider_timeout`, `provider_auth_error`, `provider_rate_limited`, `provider_http_error`, `provider_refusal`,
 `provider_error`). The `LLMProvider` interface, the registry, OpenAI and Ollama cloud are still open.
 
-### 3.2 Settings (planned)
+### 3.2 Settings (provider keys built, rest planned)
 
 - Choose provider and model for the agent; choose the default for the decision layer.
-- Per-provider key entry. Keys are stored server-side, encrypted at rest, never returned to the browser after saving. This replaces the current `localStorage` approach in `frontend/src/pages/Settings.jsx`.
-- Test-connection button per provider, backed by `GET /chat/providers/health`.
+- Per-provider key entry. Keys are stored server-side, Fernet-encrypted per user and bound to the owner, never returned to the browser after saving (only a four-character hint). The master key `SECRETS_ENCRYPTION_KEY` lives only in the local env file. Resolution order: the user's key, then the server-wide key if `ALLOW_SERVER_PROVIDER_KEYS`, then none. Only admins set the Ollama URL. Built: `/settings/providers`.
+- Test-connection button per provider, backed by `POST /settings/providers/{provider}/test`; `GET /chat/providers/health` is per user.
 - Privacy policy control: which providers may receive sensitive content (default: Ollama only).
 
 ### 3.3 Decision layer (planned)

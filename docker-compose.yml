@@ -108,6 +108,8 @@ services:
       # LLM Configuration
       OLLAMA_URL: ${OLLAMA_URL:-http://host.docker.internal:11434}
       DEFAULT_MODEL: ${DEFAULT_MODEL:-llama3.2:3b-instruct-q4_K_M}
+      SECRETS_ENCRYPTION_KEY: ${SECRETS_ENCRYPTION_KEY:-}
+      ALLOW_SERVER_PROVIDER_KEYS: ${ALLOW_SERVER_PROVIDER_KEYS:-true}
       CLAUDE_API_KEY: ${CLAUDE_API_KEY:-}
       CLAUDE_SONNET_MODEL: ${CLAUDE_SONNET_MODEL:-claude-sonnet-5-5}
       CLAUDE_OPUS_MODEL: ${CLAUDE_OPUS_MODEL:-claude-opus-5-5}

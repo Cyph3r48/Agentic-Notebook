@@ -12,7 +12,7 @@ A self-hosted, private alternative to NotebookLM. Upload documents, chat with th
 - Ollama and Claude model selection per conversation
 - Postgres + Alembic migrations, Redis, Qdrant, TEI embeddings, Docker Compose, backend CI
 
-Known problems (timeouts on real generations, Claude model IDs, API keys saved only in the browser) are listed in [`progress.md`](progress.md). Expect rough edges until those are fixed.
+Earlier known problems (timeouts, Claude model IDs, API keys saved only in the browser) are fixed on this branch but only unit-tested; the rest are in [`progress.md`](progress.md). Expect rough edges.
 
 ## Planned
 
@@ -42,10 +42,18 @@ Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` and change the passwor
 ### Providers
 
 - **Ollama:** set `OLLAMA_URL` (default `http://host.docker.internal:11434`) and pull a model, e.g. `ollama pull llama3.2:3b-instruct-q4_K_M`.
-- **Claude:** set `CLAUDE_API_KEY` in `.env`. The default models are `claude-sonnet-5-5`, `claude-opus-5-5` and `claude-haiku-5-5` (hyphens, no date suffix). With a key set, the model list also comes live from the Anthropic Models API. Tune `CLAUDE_EFFORT` (`low` to `max`) for speed versus depth.
+- **Claude:** paste your key in Settings (see below), or set a server-wide `CLAUDE_API_KEY` in `.env`. The default models are `claude-sonnet-5-5`, `claude-opus-5-5` and `claude-haiku-5-5` (hyphens, no date suffix). With a key set, the model list also comes live from the Anthropic Models API. Tune `CLAUDE_EFFORT` (`low` to `max`) for speed versus depth.
 - **OpenAI:** not wired yet.
 
 Never commit `.env`. API credits and keys belong to the provider account that issued them.
+
+### Where your API keys live
+
+- The master key, `SECRETS_ENCRYPTION_KEY`, goes in your local env file only. Generate it with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Back it up: if you lose it, saved keys cannot be read and must be entered again.
+- Provider keys are entered on the Settings page. The server stores them encrypted, tied to your account, and never sends one back to the browser. Only the last four characters are shown.
+- Keys an older version saved in your browser can be moved to the server from Settings; the browser copy is then deleted.
+- Without a master key the Settings page cannot save keys, and the server-wide `CLAUDE_API_KEY` is used if `ALLOW_SERVER_PROVIDER_KEYS=true`.
+- Outside localhost, serve the app over HTTPS, since keys travel from your browser to the server once when you save them.
 
 ### Semantic search
 

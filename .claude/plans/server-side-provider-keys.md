@@ -303,4 +303,8 @@ Generate a master key, put it in the local env file, `docker compose up -d --bui
 
 ## AMENDMENTS
 
-- (none yet)
+- Master key is validated inside `SecretBox` (status ok/missing/invalid), not by a pydantic validator, because pydantic echoes invalid input in its error text.
+- Provider status carries `supported` (false for OpenAI until an adapter exists) and `needs_reentry` (saved key unreadable after a master key change).
+- Effort is sent only when the Models API capabilities allow it, merged with the configured map.
+- Frontend: key entry is a shared `ProviderKeyFields` component rather than inline card code; the Ollama default-models field was dropped from the card.
+- `npm run build` could not be used as a gate: it fails on `index.css` before this change. Lint and an esbuild compile were used instead.
