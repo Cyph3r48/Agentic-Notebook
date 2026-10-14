@@ -4,12 +4,20 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import db_session, get_current_user
+from app.api.deps import db_session, get_credential_service, get_current_user
 from app.api.v1.endpoints import chat as chat_module
 from app.api.v1.endpoints.chat import router
+
+
+class _NoCredentials:
+    """Stands in for CredentialService: nothing saved, so the server settings apply."""
+
+    async def resolve(self, user_id, provider):
+        return None
 
 
 async def _fake_db_session():
@@ -20,11 +28,22 @@ def _fake_user():
     return SimpleNamespace(id=uuid4(), role="user")
 
 
+@pytest.fixture(autouse=True)
+def _empty_history(monkeypatch):
+    """Endpoints load chat history from the database; these tests run without one."""
+
+    async def fake_list_recent_messages(self, *, conversation_id, limit):
+        return []
+
+    monkeypatch.setattr(chat_module.ChatRepository, "list_recent_messages", fake_list_recent_messages)
+
+
 def _build_test_client() -> TestClient:
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = _fake_user
+    app.dependency_overrides[get_credential_service] = lambda: _NoCredentials()
     return TestClient(app)
 
 
@@ -171,7 +190,7 @@ def test_send_message_endpoint(monkeypatch):
             }
         ]
 
-    async def fake_llm_reply(self, *, model, user_message, context_lines):
+    async def fake_llm_reply(self, *, model, user_message, context_lines, **kwargs):
         return "assistant-response", {"provider": "ollama", "model": model}
 
     monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
@@ -234,7 +253,7 @@ def test_stream_message_endpoint(monkeypatch):
         created_rows.append(row)
         return row
 
-    async def fake_stream_chat_reply(cls, *, model, user_message, context_lines):
+    async def fake_stream_chat_reply(cls, *, model, user_message, context_lines, **kwargs):
         yield "stream "
         yield "reply"
 
@@ -278,7 +297,7 @@ def test_stream_message_endpoint_falls_back_on_provider_error(monkeypatch):
         created_rows.append(row)
         return row
 
-    async def fail_stream_chat_reply(cls, *, model, user_message, context_lines):
+    async def fail_stream_chat_reply(cls, *, model, user_message, context_lines, **kwargs):
         raise RuntimeError("provider unavailable")
         yield ""
 
@@ -456,7 +475,7 @@ def test_list_messages_endpoint_with_filters(monkeypatch):
 
 
 def test_models_endpoint(monkeypatch):
-    async def fake_list_models(cls):
+    async def fake_list_models(cls, **kwargs):
         return {
             "ollama": [{"id": "llama3.2:3b-instruct-q4_K_M", "provider": "ollama"}],
             "anthropic": [{"id": "claude-sonnet-4-6", "provider": "anthropic"}],
@@ -475,7 +494,7 @@ def test_models_endpoint(monkeypatch):
 
 
 def test_provider_health_endpoint(monkeypatch):
-    async def fake_provider_health(cls):
+    async def fake_provider_health(cls, **kwargs):
         return {
             "ollama": {"healthy": True, "circuit_open": False},
             "anthropic": {"healthy": False, "circuit_open": True},

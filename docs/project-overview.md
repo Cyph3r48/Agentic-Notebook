@@ -131,7 +131,7 @@ structured-intelligence/
 │
 ├── docs/                                 # Additional documentation
 │   ├── API.md                            # API documentation
-│   ├── ARCHITECTURE.md                   # System architecture
+│   ├── architecture.md                   # System architecture
 │   ├── SMC_INTEGRATION.md                # SMC integration guide
 │   └── DEPLOYMENT.md                     # Deployment guide
 │
