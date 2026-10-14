@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import re
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any, AsyncIterator, Iterable
 
@@ -39,10 +40,35 @@ class StreamOutcome:
     truncated: bool = False
 
 
+@dataclass(frozen=True)
+class ProviderCredentials:
+    """What to use for one provider on one request. `repr` never shows the key."""
+
+    api_key: str | None = field(default=None, repr=False)
+    base_url: str | None = None
+    source: str = "server"  # "user" (this user's saved credentials) or "server" (environment settings)
+    owner: str | None = None  # user id, for logs only
+
+    def fingerprint(self) -> str:
+        """Short, non-reversible id used to key caches and circuit breakers. "server" for server-wide settings."""
+        if self.source == "server" and not self.api_key and not self.base_url:
+            return "server"
+        digest = hashlib.sha256(f"{self.api_key or ''}|{self.base_url or ''}".encode("utf-8")).hexdigest()
+        return digest[:12]
+
+
+def _breaker_key(provider: str, credentials: ProviderCredentials | None) -> str:
+    """Circuit state is per credential; the server-wide credential keeps the plain provider name."""
+    if credentials is None or credentials.source == "server":
+        return provider
+    return f"{provider}:{credentials.fingerprint()}"
+
+
 class LLMService:
     _failure_count: dict[str, int] = {"ollama": 0, "anthropic": 0}
     _circuit_open_until: dict[str, datetime | None] = {"ollama": None, "anthropic": None}
-    _model_cache: tuple[float, list[dict[str, str]]] | None = None
+    # Live Claude model lists, cached per credential so one user's list is never served to another.
+    _model_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}
     # Whether each Claude model accepts the configured effort level, learned from the Models API.
     # Unknown models are assumed to accept it (the configured, current models all do).
     _effort_ok: dict[str, bool] = {}
@@ -74,34 +100,43 @@ class LLMService:
                 seen.append(model_id)
         return [{"id": model_id, "name": model_id} for model_id in seen]
 
+    @staticmethod
+    def _claude_key(credentials: ProviderCredentials | None) -> str:
+        return (credentials.api_key if credentials and credentials.api_key else settings.CLAUDE_API_KEY) or ""
+
     @classmethod
-    async def claude_model_catalog(cls) -> list[dict[str, str]]:
-        """Claude models from the Anthropic Models API when a key is set, else the configured IDs."""
+    async def claude_model_catalog(cls, credentials: ProviderCredentials | None = None) -> list[dict[str, str]]:
+        """Claude models from the Anthropic Models API when a key is available, else the configured IDs."""
         static = cls.configured_claude_models()
-        if not settings.CLAUDE_API_KEY:
+        api_key = cls._claude_key(credentials)
+        if not api_key:
             return static
 
+        cache_key = hashlib.sha256(api_key.encode("utf-8")).hexdigest()[:12]
         now = time.monotonic()
-        cached = cls._model_cache
+        cached = cls._model_cache.get(cache_key)
         if cached is not None and cached[0] > now:
             return cached[1]
 
         try:
             entries: list[dict[str, str]] = []
             effort_ok: dict[str, bool] = {}
-            async with cls._anthropic_client(timeout=10.0, max_retries=0) as client:
+            async with cls._anthropic_client(credentials=credentials, timeout=10.0, max_retries=0) as client:
                 async for info in client.models.list():
                     if info.id.startswith("claude-"):
                         entries.append({"id": info.id, "name": getattr(info, "display_name", None) or info.id})
                         effort_ok[info.id] = cls._supports_effort(info)
             if not entries:
                 raise RuntimeError("Models API returned no Claude models")
-            cls._model_cache = (now + settings.LLM_MODEL_LIST_TTL_SECONDS, entries)
-            cls._effort_ok = effort_ok
+            cls._model_cache[cache_key] = (now + settings.LLM_MODEL_LIST_TTL_SECONDS, entries)
+            cls._effort_ok = {**cls._effort_ok, **effort_ok}
             return entries
         except Exception as exc:
-            logger.warning("Could not list Claude models from the API; using configured IDs: {error}", error=str(exc))
-            cls._model_cache = (now + MODEL_LIST_FAILURE_TTL_SECONDS, static)
+            logger.warning(
+                "Could not list Claude models from the API; using configured IDs: {error_type}",
+                error_type=cls._error_type(exc),
+            )
+            cls._model_cache[cache_key] = (now + MODEL_LIST_FAILURE_TTL_SECONDS, static)
             return static
 
     @staticmethod
@@ -116,8 +151,8 @@ class LLMService:
         return level is None or bool(level.supported)
 
     @classmethod
-    async def allowed_claude_models(cls) -> set[str]:
-        catalog = await cls.claude_model_catalog()
+    async def allowed_claude_models(cls, credentials: ProviderCredentials | None = None) -> set[str]:
+        catalog = await cls.claude_model_catalog(credentials)
         return {entry["id"] for entry in catalog} | {entry["id"] for entry in cls.configured_claude_models()}
 
     # ------------------------------------------------------------------
@@ -204,10 +239,11 @@ class LLMService:
         context_lines: list[str],
         history: list[dict[str, str]] | None = None,
         system_prompt: str | None = None,
+        credentials: ProviderCredentials | None = None,
     ) -> tuple[str, dict[str, Any]]:
         started_at = time.perf_counter()
         provider = cls.provider_for(model)
-        if cls._is_circuit_open(provider):
+        if cls._is_circuit_open(provider, credentials):
             logger.warning("LLM circuit open provider={provider}; using fallback response", provider=provider)
             content = cls._fallback_content(context_lines)
             metadata = {
@@ -229,6 +265,7 @@ class LLMService:
                     context_lines=context_lines,
                     history=history,
                     system_prompt=system_prompt,
+                    credentials=credentials,
                 )
             else:
                 content, usage = await cls._generate_with_ollama(
@@ -237,15 +274,17 @@ class LLMService:
                     context_lines=context_lines,
                     history=history,
                     system_prompt=system_prompt,
+                    credentials=credentials,
                 )
-            cls._record_success(provider)
+            cls._record_success(provider, credentials)
         except Exception as exc:
-            cls._record_failure(provider)
+            cls._record_failure(provider, credentials)
             error_type = cls._error_type(exc)
             logger.warning(
-                "LLM generation failed provider={provider} model={model} error_type={error_type} request_id={request_id}: {error}",
+                "LLM generation failed provider={provider} model={model} credential={credential} error_type={error_type} request_id={request_id}: {error}",
                 provider=provider,
                 model=model,
+                credential=credentials.source if credentials else "server",
                 error_type=error_type,
                 request_id=getattr(exc, "request_id", None),
                 error=str(exc),
@@ -276,6 +315,7 @@ class LLMService:
         history: list[dict[str, str]] | None = None,
         system_prompt: str | None = None,
         outcome: StreamOutcome | None = None,
+        credentials: ProviderCredentials | None = None,
     ) -> AsyncIterator[str]:
         provider = cls.provider_for(model)
         outcome = outcome if outcome is not None else StreamOutcome()
@@ -288,13 +328,14 @@ class LLMService:
                 history=history,
                 system_prompt=system_prompt,
                 outcome=outcome,
+                credentials=credentials,
             ):
                 yield part
         except Exception as exc:
-            cls._record_failure(provider)
+            cls._record_failure(provider, credentials)
             outcome.error_type = cls._error_type(exc)
             raise
-        cls._record_success(provider)
+        cls._record_success(provider, credentials)
 
     # ------------------------------------------------------------------
     # Ollama
@@ -310,8 +351,19 @@ class LLMService:
         )
 
     @classmethod
-    def _ollama_client(cls) -> httpx.AsyncClient:
+    def _ollama_client(cls, credentials: ProviderCredentials | None = None) -> httpx.AsyncClient:
         return httpx.AsyncClient(timeout=cls._ollama_timeout())
+
+    @staticmethod
+    def _ollama_base_url(credentials: ProviderCredentials | None) -> str:
+        return ((credentials.base_url if credentials and credentials.base_url else settings.OLLAMA_URL) or "").rstrip("/")
+
+    @staticmethod
+    def _ollama_headers(credentials: ProviderCredentials | None) -> dict[str, str]:
+        """Ollama Cloud (https://ollama.com/api) authenticates with a Bearer API key; a local Ollama needs none."""
+        if credentials and credentials.api_key:
+            return {"Authorization": f"Bearer {credentials.api_key}"}
+        return {}
 
     @staticmethod
     def _ollama_probe_timeout() -> httpx.Timeout:
@@ -344,6 +396,7 @@ class LLMService:
         context_lines: list[str],
         history: list[dict[str, str]] | None = None,
         system_prompt: str | None = None,
+        credentials: ProviderCredentials | None = None,
     ) -> tuple[str, dict[str, Any]]:
         payload = cls._ollama_payload(
             model=model,
@@ -353,12 +406,13 @@ class LLMService:
             history=history,
             system_prompt=system_prompt,
         )
-        url = f"{settings.OLLAMA_URL.rstrip('/')}/api/chat"
+        url = f"{cls._ollama_base_url(credentials)}/api/chat"
+        headers = cls._ollama_headers(credentials)
         data: dict[str, Any] = {}
         for attempt in range(1, OLLAMA_MAX_ATTEMPTS + 1):
             try:
-                async with cls._ollama_client() as client:
-                    response = await client.post(url, json=payload)
+                async with cls._ollama_client(credentials) as client:
+                    response = await client.post(url, json=payload, headers=headers)
                     response.raise_for_status()
                     data = response.json()
                 break
@@ -392,6 +446,7 @@ class LLMService:
         history: list[dict[str, str]] | None = None,
         system_prompt: str | None = None,
         outcome: StreamOutcome | None = None,
+        credentials: ProviderCredentials | None = None,
     ) -> AsyncIterator[str]:
         payload = cls._ollama_payload(
             model=model,
@@ -401,9 +456,10 @@ class LLMService:
             history=history,
             system_prompt=system_prompt,
         )
-        url = f"{settings.OLLAMA_URL.rstrip('/')}/api/chat"
-        async with cls._ollama_client() as client:
-            async with client.stream("POST", url, json=payload) as response:
+        url = f"{cls._ollama_base_url(credentials)}/api/chat"
+        headers = cls._ollama_headers(credentials)
+        async with cls._ollama_client(credentials) as client:
+            async with client.stream("POST", url, json=payload, headers=headers) as response:
                 response.raise_for_status()
                 async for line in response.aiter_lines():
                     if not line:
@@ -425,11 +481,18 @@ class LLMService:
     # ------------------------------------------------------------------
 
     @classmethod
-    def _anthropic_client(cls, *, timeout: float | None = None, max_retries: int = 2) -> anthropic.AsyncAnthropic:
-        if not settings.CLAUDE_API_KEY:
-            raise RuntimeError("CLAUDE_API_KEY is not configured")
+    def _anthropic_client(
+        cls,
+        *,
+        credentials: ProviderCredentials | None = None,
+        timeout: float | None = None,
+        max_retries: int = 2,
+    ) -> anthropic.AsyncAnthropic:
+        api_key = cls._claude_key(credentials)
+        if not api_key:
+            raise RuntimeError("No Claude API key is configured")
         return anthropic.AsyncAnthropic(
-            api_key=settings.CLAUDE_API_KEY,
+            api_key=api_key,
             timeout=timeout if timeout is not None else settings.ANTHROPIC_REQUEST_TIMEOUT_SECONDS,
             max_retries=max_retries,
         )
@@ -477,8 +540,9 @@ class LLMService:
         context_lines: list[str],
         history: list[dict[str, str]] | None = None,
         system_prompt: str | None = None,
+        credentials: ProviderCredentials | None = None,
     ) -> tuple[str, dict[str, Any]]:
-        await cls.claude_model_catalog()  # learns which models accept `effort`; cached
+        await cls.claude_model_catalog(credentials)  # learns which models accept `effort`; cached
         request = cls._anthropic_request(
             model=model,
             user_message=user_message,
@@ -487,7 +551,7 @@ class LLMService:
             system_prompt=system_prompt,
         )
         # Streaming keeps long answers from hitting HTTP timeouts; the final message has the same shape.
-        async with cls._anthropic_client() as client:
+        async with cls._anthropic_client(credentials=credentials) as client:
             async with client.messages.stream(**request) as stream:
                 message = await stream.get_final_message()
 
@@ -515,8 +579,9 @@ class LLMService:
         history: list[dict[str, str]] | None = None,
         system_prompt: str | None = None,
         outcome: StreamOutcome | None = None,
+        credentials: ProviderCredentials | None = None,
     ) -> AsyncIterator[str]:
-        await cls.claude_model_catalog()  # learns which models accept `effort`; cached
+        await cls.claude_model_catalog(credentials)  # learns which models accept `effort`; cached
         request = cls._anthropic_request(
             model=model,
             user_message=user_message,
@@ -525,7 +590,7 @@ class LLMService:
             system_prompt=system_prompt,
         )
         yielded = False
-        async with cls._anthropic_client() as client:
+        async with cls._anthropic_client(credentials=credentials) as client:
             async with client.messages.stream(**request) as stream:
                 async for delta in stream.text_stream:
                     if delta:
@@ -551,27 +616,44 @@ class LLMService:
     # ------------------------------------------------------------------
 
     @classmethod
-    async def provider_health(cls) -> dict[str, Any]:
+    async def provider_health(
+        cls,
+        *,
+        ollama: ProviderCredentials | None = None,
+        anthropic_credentials: ProviderCredentials | None = None,
+    ) -> dict[str, Any]:
         ollama_ok = False
         try:
             async with httpx.AsyncClient(timeout=cls._ollama_probe_timeout()) as client:
-                response = await client.get(f"{settings.OLLAMA_URL.rstrip('/')}/api/tags")
+                response = await client.get(
+                    f"{cls._ollama_base_url(ollama)}/api/tags", headers=cls._ollama_headers(ollama)
+                )
                 ollama_ok = response.status_code == 200
         except Exception as exc:
-            logger.debug("Ollama health probe failed: {error}", error=str(exc))
+            logger.debug("Ollama health probe failed: {error_type}", error_type=cls._error_type(exc))
             ollama_ok = False
-        anthropic_ok = bool(settings.CLAUDE_API_KEY)
+        anthropic_ok = bool(cls._claude_key(anthropic_credentials))
         return {
-            "ollama": {"healthy": ollama_ok, "circuit_open": cls._is_circuit_open("ollama")},
-            "anthropic": {"healthy": anthropic_ok, "circuit_open": cls._is_circuit_open("anthropic")},
+            "ollama": {"healthy": ollama_ok, "circuit_open": cls._is_circuit_open("ollama", ollama)},
+            "anthropic": {
+                "healthy": anthropic_ok,
+                "circuit_open": cls._is_circuit_open("anthropic", anthropic_credentials),
+            },
         }
 
     @classmethod
-    async def list_models(cls) -> dict[str, list[dict[str, Any]]]:
+    async def list_models(
+        cls,
+        *,
+        ollama: ProviderCredentials | None = None,
+        anthropic_credentials: ProviderCredentials | None = None,
+    ) -> dict[str, list[dict[str, Any]]]:
         ollama_models: list[dict[str, Any]] = []
         try:
             async with httpx.AsyncClient(timeout=cls._ollama_probe_timeout()) as client:
-                response = await client.get(f"{settings.OLLAMA_URL.rstrip('/')}/api/tags")
+                response = await client.get(
+                    f"{cls._ollama_base_url(ollama)}/api/tags", headers=cls._ollama_headers(ollama)
+                )
                 response.raise_for_status()
                 payload = response.json()
                 for model in payload.get("models", []) or []:
@@ -579,12 +661,43 @@ class LLMService:
                     if name:
                         ollama_models.append({"id": name, "name": name, "provider": "ollama"})
         except Exception as exc:
-            logger.warning("Unable to list Ollama models: {error}", error=str(exc))
+            logger.warning("Unable to list Ollama models: {error_type}", error_type=cls._error_type(exc))
         anthropic_models = [
             {"id": entry["id"], "name": entry["name"], "provider": "anthropic"}
-            for entry in await cls.claude_model_catalog()
+            for entry in await cls.claude_model_catalog(anthropic_credentials)
         ]
         return {"ollama": ollama_models, "anthropic": anthropic_models}
+
+    _TEST_DETAIL = {
+        "provider_auth_error": "The provider rejected the key.",
+        "provider_rate_limited": "The provider is rate limiting this key.",
+        "provider_timeout": "The provider did not answer in time.",
+        "provider_http_error": "The provider returned an error.",
+        "provider_error": "Could not reach the provider.",
+    }
+
+    @classmethod
+    async def test_connection(cls, provider: str, credentials: ProviderCredentials | None) -> dict[str, Any]:
+        """Cheap, authenticated check of a provider. Never raises and never puts the key or a raw error in the result."""
+        try:
+            if provider == "anthropic":
+                if not cls._claude_key(credentials):
+                    return {"ok": False, "error_type": "not_configured", "detail": "No Claude API key is saved."}
+                async with cls._anthropic_client(credentials=credentials, timeout=10.0, max_retries=0) as client:
+                    await client.models.list(limit=1)
+                return {"ok": True, "error_type": None, "detail": "Connected."}
+            if provider == "ollama":
+                async with httpx.AsyncClient(timeout=cls._ollama_probe_timeout()) as client:
+                    response = await client.get(
+                        f"{cls._ollama_base_url(credentials)}/api/tags", headers=cls._ollama_headers(credentials)
+                    )
+                    response.raise_for_status()
+                return {"ok": True, "error_type": None, "detail": "Connected."}
+            return {"ok": False, "error_type": "provider_not_supported", "detail": "This provider is not supported yet."}
+        except Exception as exc:
+            error_type = cls._error_type(exc)
+            logger.warning("Provider connection test failed provider={provider} error_type={error_type}", provider=provider, error_type=error_type)
+            return {"ok": False, "error_type": error_type, "detail": cls._TEST_DETAIL.get(error_type, cls._TEST_DETAIL["provider_error"])}
 
     # ------------------------------------------------------------------
     # Errors and circuit breaker
@@ -598,27 +711,35 @@ class LLMService:
             return "provider_auth_error"
         if isinstance(exc, anthropic.RateLimitError):
             return "provider_rate_limited"
+        if isinstance(exc, httpx.HTTPStatusError):
+            if exc.response.status_code in (401, 403):
+                return "provider_auth_error"
+            if exc.response.status_code == 429:
+                return "provider_rate_limited"
         if isinstance(exc, (anthropic.APIStatusError, httpx.HTTPStatusError)):
             return "provider_http_error"
         return "provider_error"
 
     @classmethod
-    def _record_failure(cls, provider: str) -> None:
-        cls._failure_count[provider] = cls._failure_count.get(provider, 0) + 1
-        if cls._failure_count[provider] >= 3:
-            cls._circuit_open_until[provider] = datetime.now(tz=timezone.utc) + timedelta(seconds=30)
+    def _record_failure(cls, provider: str, credentials: ProviderCredentials | None = None) -> None:
+        key = _breaker_key(provider, credentials)
+        cls._failure_count[key] = cls._failure_count.get(key, 0) + 1
+        if cls._failure_count[key] >= 3:
+            cls._circuit_open_until[key] = datetime.now(tz=timezone.utc) + timedelta(seconds=30)
 
     @classmethod
-    def _record_success(cls, provider: str) -> None:
-        cls._failure_count[provider] = 0
-        cls._circuit_open_until[provider] = None
+    def _record_success(cls, provider: str, credentials: ProviderCredentials | None = None) -> None:
+        key = _breaker_key(provider, credentials)
+        cls._failure_count[key] = 0
+        cls._circuit_open_until[key] = None
 
     @classmethod
-    def _is_circuit_open(cls, provider: str) -> bool:
-        opened_until = cls._circuit_open_until.get(provider)
+    def _is_circuit_open(cls, provider: str, credentials: ProviderCredentials | None = None) -> bool:
+        key = _breaker_key(provider, credentials)
+        opened_until = cls._circuit_open_until.get(key)
         if opened_until is None:
             return False
         if datetime.now(tz=timezone.utc) >= opened_until:
-            cls._circuit_open_until[provider] = None
+            cls._circuit_open_until[key] = None
             return False
         return True

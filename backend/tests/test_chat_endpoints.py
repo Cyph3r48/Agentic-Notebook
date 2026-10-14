@@ -8,9 +8,16 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import db_session, get_current_user
+from app.api.deps import db_session, get_credential_service, get_current_user
 from app.api.v1.endpoints import chat as chat_module
 from app.api.v1.endpoints.chat import router
+
+
+class _NoCredentials:
+    """Stands in for CredentialService: nothing saved, so the server settings apply."""
+
+    async def resolve(self, user_id, provider):
+        return None
 
 
 async def _fake_db_session():
@@ -36,6 +43,7 @@ def _build_test_client() -> TestClient:
     app.include_router(router)
     app.dependency_overrides[db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = _fake_user
+    app.dependency_overrides[get_credential_service] = lambda: _NoCredentials()
     return TestClient(app)
 
 
@@ -467,7 +475,7 @@ def test_list_messages_endpoint_with_filters(monkeypatch):
 
 
 def test_models_endpoint(monkeypatch):
-    async def fake_list_models(cls):
+    async def fake_list_models(cls, **kwargs):
         return {
             "ollama": [{"id": "llama3.2:3b-instruct-q4_K_M", "provider": "ollama"}],
             "anthropic": [{"id": "claude-sonnet-4-6", "provider": "anthropic"}],
@@ -486,7 +494,7 @@ def test_models_endpoint(monkeypatch):
 
 
 def test_provider_health_endpoint(monkeypatch):
-    async def fake_provider_health(cls):
+    async def fake_provider_health(cls, **kwargs):
         return {
             "ollama": {"healthy": True, "circuit_open": False},
             "anthropic": {"healthy": False, "circuit_open": True},

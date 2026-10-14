@@ -8,10 +8,17 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import db_session, get_current_user
+from app.api.deps import db_session, get_credential_service, get_current_user
 from app.api.v1.endpoints import chat as chat_module
 from app.api.v1.endpoints.chat import router
 from app.core.config import settings
+
+
+class _NoCredentials:
+    """Stands in for CredentialService: nothing saved, so the server settings apply."""
+
+    async def resolve(self, user_id, provider):
+        return None
 
 
 async def _fake_db_session():
@@ -23,6 +30,7 @@ def _client() -> TestClient:
     app.include_router(router)
     app.dependency_overrides[db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4(), role="user")
+    app.dependency_overrides[get_credential_service] = lambda: _NoCredentials()
     return TestClient(app)
 
 

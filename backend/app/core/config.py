@@ -6,7 +6,7 @@ Pydantic settings with environment variable support
 import secrets
 from typing import List
 
-from pydantic import Field, field_validator
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -84,6 +84,16 @@ class Settings(BaseSettings):
         if value not in allowed:
             raise ValueError(f"CLAUDE_EFFORT must be one of {sorted(allowed)}")
         return value
+
+    # ============================================
+    # STORED PROVIDER KEYS
+    # ============================================
+    # Comma-separated Fernet keys, newest first (older keys stay so existing rows still decrypt).
+    # Lives only in the local environment, never in git. Not validated here on purpose: pydantic
+    # would print a bad value in its error text. SecretBox validates it without echoing it.
+    SECRETS_ENCRYPTION_KEY: SecretStr = Field(default=SecretStr(""))
+    # When a user has not saved their own key, fall back to the server-wide key (CLAUDE_API_KEY).
+    ALLOW_SERVER_PROVIDER_KEYS: bool = Field(default=True)
 
     # ============================================
     # AUTHENTICATION

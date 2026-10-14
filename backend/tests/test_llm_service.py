@@ -17,7 +17,7 @@ from app.services.llm_service import REFUSAL_TEXT, LLMService, StreamOutcome
 def _clean_state(monkeypatch):
     monkeypatch.setattr(LLMService, "_failure_count", {"ollama": 0, "anthropic": 0})
     monkeypatch.setattr(LLMService, "_circuit_open_until", {"ollama": None, "anthropic": None})
-    monkeypatch.setattr(LLMService, "_model_cache", None)
+    monkeypatch.setattr(LLMService, "_model_cache", {})
     monkeypatch.setattr(LLMService, "_effort_ok", {})
     monkeypatch.setattr(llm_module, "OLLAMA_RETRY_DELAY_SECONDS", 0)
     monkeypatch.setattr(settings, "CLAUDE_API_KEY", "")
@@ -178,7 +178,7 @@ def _install_ollama(monkeypatch, handler):
     monkeypatch.setattr(
         LLMService,
         "_ollama_client",
-        classmethod(lambda cls: httpx.AsyncClient(transport=transport, timeout=cls._ollama_timeout())),
+        classmethod(lambda cls, credentials=None: httpx.AsyncClient(transport=transport, timeout=cls._ollama_timeout())),
     )
     return calls
 

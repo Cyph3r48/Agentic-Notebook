@@ -14,6 +14,7 @@ qdrant-client==1.12.0
 
 # Authentication & Security
 python-jose[cryptography]==3.3.0
+cryptography==50.0.2  # Fernet for stored provider keys (also pulled in by python-jose)
 passlib[bcrypt]==1.7.4
 bcrypt==4.2.1
 pyjwt==2.9.0
