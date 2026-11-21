@@ -128,7 +128,7 @@ services:
       ENVIRONMENT: ${ENVIRONMENT:-development}
       DEBUG: ${DEBUG:-false}
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
-      AUTO_RUN_MIGRATIONS: ${AUTO_RUN_MIGRATIONS:-false}
+      AUTO_RUN_MIGRATIONS: ${AUTO_RUN_MIGRATIONS:-true}
       
       # SMC Integration
       SMC_ENABLED: ${SMC_ENABLED:-true}
