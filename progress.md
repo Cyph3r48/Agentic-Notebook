@@ -16,7 +16,9 @@ The owner deleted their local copy of the repo; the only copy is on GitHub, bran
 
 2026-11-21 (later): `MemoryProvider` with a default-on `builtin` backend is implemented (plan: `.claude/plans/memory-provider-builtin.md`), unit-tested and run by hand against real Postgres, Redis and Qdrant with a stand-in embedding service. Not run: Docker, the real TEI image, a real Claude or Ollama reply. Next step: owner runs `docker compose up` on a clean clone, then the `LLMProvider` interface and OpenAI adapter.
 
-2026-11-21 (latest): planned the `LLMProvider` interface and OpenAI adapter in `.claude/plans/llm-provider-interface-openai.md`. API facts came from the installed `openai` 3.57.0 SDK source because OpenAI's docs hosts were blocked; data-retention wording and the Chat Completions status are unverified (listed in the plan). Notable: OpenAI's `store` defaults to true (30+ days), so the adapter must always send `store=False`. Nothing implemented yet. Next step: `piv-implement` on that plan. Owner decision: the SMC adapter comes last.
+2026-11-21 (latest): planned the `LLMProvider` interface and OpenAI adapter in `.claude/plans/llm-provider-interface-openai.md`. API facts came from the installed `openai` 3.57.0 SDK source because OpenAI's docs hosts were blocked; data-retention wording and the Chat Completions status are unverified (listed in the plan). Notable: OpenAI's `store` defaults to true (30+ days), so the adapter must always send `store=False`. Nothing implemented yet. Owner decision: the SMC adapter comes last.
+
+2026-11-21 (model selection): owner wants OpenAI among the provider choices in Settings, a way to select the models in use, and embeddings served by Ollama (Cloud or local). Planned in `.claude/plans/model-selection-and-embeddings.md`: `ollama_cloud` provider, `provider` stored on conversations, per-user enabled models and default, admin-chosen embedding provider/model with a real probe, identity-named Qdrant collections and a re-index job. Unverified: whether Ollama Cloud serves embedding models (`ollama.com` blocked here). Order: LLMProvider/OpenAI plan, then Part 1, then Part 2.
 
 ## Done (in the code today)
 

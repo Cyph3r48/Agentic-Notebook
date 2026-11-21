@@ -56,7 +56,7 @@ So that I am not tied to one provider and my keys stay mine.
 - `.claude/plans/memory-provider-builtin.md` - same interface-plus-registry layering
 
 **Forward-references**:
-- (none yet)
+- `.claude/plans/model-selection-and-embeddings.md` - adds a `provider` column and `ollama_cloud`, which replace the name-based routing used here
 
 ---
 
