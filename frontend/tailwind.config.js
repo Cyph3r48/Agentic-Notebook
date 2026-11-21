@@ -8,9 +8,9 @@ export default {
     extend: {
       colors: {
         // Dark blue base - using CSS variables for theme switching
-        'dark-base': 'var(--color-dark-base)',
-        'dark-surface': 'var(--color-dark-surface)',
-        'dark-elevated': 'var(--color-dark-elevated)',
+        'dark-base': 'rgb(var(--color-dark-base) / <alpha-value>)',
+        'dark-surface': 'rgb(var(--color-dark-surface) / <alpha-value>)',
+        'dark-elevated': 'rgb(var(--color-dark-elevated) / <alpha-value>)',
         
         // Blue tones
         'blue': {
