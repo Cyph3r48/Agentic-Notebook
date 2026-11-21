@@ -14,6 +14,7 @@ from app.core.config import settings
 from app.main import app
 from app.schemas.provider_settings import ProviderSaveRequest
 from app.services.credential_service import CredentialService
+from app.services.llm.anthropic_provider import AnthropicProvider
 from app.services.llm_service import LLMService, ProviderCredentials
 
 SENTINEL = "sk-ant-test-SENTINEL-hygiene-0001"
@@ -77,8 +78,8 @@ class _FailingClient:
 
 @pytest.mark.asyncio
 async def test_a_failing_provider_call_logs_no_key(captured_logs, monkeypatch):
-    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(lambda cls, **kwargs: _FailingClient()))
-    monkeypatch.setattr(LLMService, "_model_cache", {})
+    monkeypatch.setattr(AnthropicProvider, "_anthropic_client", classmethod(lambda cls, **kwargs: _FailingClient()))
+    monkeypatch.setattr(AnthropicProvider, "_model_cache", {})
 
     credentials = ProviderCredentials(api_key=SENTINEL, source="user", owner="u1")
     _, metadata = await LLMService.generate_chat_reply(

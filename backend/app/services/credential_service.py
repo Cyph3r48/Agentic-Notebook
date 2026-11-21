@@ -10,13 +10,13 @@ from uuid import UUID
 
 from loguru import logger
 
-from app.core.config import settings
 from app.core.secret_box import SecretBox, SecretDecryptError, SecretsNotConfigured, get_secret_box
 from app.schemas.provider_settings import PROVIDERS, ProviderStatus
-from app.services.llm_service import LLMService, ProviderCredentials
+from app.services.llm_service import PROVIDER_IDS, LLMService, ProviderCredentials
+from app.services.llm.registry import get_provider
 
-# Providers that have an adapter today. OpenAI keys can be stored already; the adapter is a later ticket.
-SUPPORTED_PROVIDERS = {"anthropic", "ollama"}
+# Providers that have an adapter. A provider in PROVIDERS without one can store a key but cannot be used yet.
+SUPPORTED_PROVIDERS = set(PROVIDER_IDS)
 
 
 def _context(user_id: UUID | str, provider: str) -> str:
@@ -56,9 +56,8 @@ class CredentialService:
             if api_key or row.base_url:
                 return ProviderCredentials(api_key=api_key, base_url=row.base_url, source="user", owner=str(user_id))
 
-        if provider == "anthropic" and settings.ALLOW_SERVER_PROVIDER_KEYS and settings.CLAUDE_API_KEY:
-            return ProviderCredentials(api_key=settings.CLAUDE_API_KEY, source="server")
-        return None
+        adapter = get_provider(provider)
+        return adapter.server_credentials() if adapter is not None else None
 
     # ------------------------------------------------------------------
     # Status: what the Settings page shows. Never contains a key.
@@ -84,10 +83,10 @@ class CredentialService:
 
         if has_key or has_url:
             source = "user"
-        elif provider == "anthropic" and settings.ALLOW_SERVER_PROVIDER_KEYS and settings.CLAUDE_API_KEY:
-            source = "server"
-        elif provider == "ollama":
-            source = "server"  # the server's OLLAMA_URL is always available
+        elif (adapter := get_provider(provider)) is not None and (
+            adapter.server_credentials() is not None or adapter.always_available
+        ):
+            source = "server"  # the server-wide key, or (local Ollama) the server's own URL
         else:
             source = "none"
 

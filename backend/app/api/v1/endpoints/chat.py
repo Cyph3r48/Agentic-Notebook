@@ -23,7 +23,7 @@ from app.schemas.chat import (
     MessageResponse,
 )
 from app.services.credential_service import CredentialService
-from app.services.llm_service import LLMService, ProviderCredentials, StreamOutcome
+from app.services.llm_service import PROVIDER_IDS, LLMService, ProviderCredentials, StreamOutcome, UnsupportedModel
 from app.services.memory import MemoryProvider
 
 
@@ -41,19 +41,21 @@ def _estimate_tokens(text: str) -> int:
     return max(int(len(text.split()) * 1.3), 1)
 
 
-async def _resolve_model(model: str | None, credentials: ProviderCredentials | None = None) -> str:
+async def _resolve_model(model: str | None, credential_service: CredentialService, user_id: UUID) -> str:
     selected = (model or settings.DEFAULT_MODEL).strip()
     if not selected:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Model is required")
-    if selected.lower().startswith("claude-"):
-        selected = LLMService.normalize_claude_model(selected)
-        allowed = await LLMService.allowed_claude_models(credentials)
-        if selected not in allowed:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported Anthropic model. Allowed: {sorted(allowed)}",
-            )
-    return selected
+    credentials = await credential_service.resolve(user_id, LLMService.provider_for(selected))
+    try:
+        return await LLMService.resolve_model(selected, credentials)
+    except UnsupportedModel as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+async def _credentials_by_provider(
+    credential_service: CredentialService, user_id: UUID
+) -> dict[str, ProviderCredentials | None]:
+    return {provider_id: await credential_service.resolve(user_id, provider_id) for provider_id in PROVIDER_IDS}
 
 
 def _as_message_response(message) -> MessageResponse:
@@ -180,13 +182,10 @@ async def create_conversation(
     credentials: CredentialService = Depends(get_credential_service),
 ) -> ConversationResponse:
     chat_repo = ChatRepository(session)
-    claude_credentials = None
-    if (payload.model or "").strip().lower().startswith("claude-"):
-        claude_credentials = await credentials.resolve(current_user.id, "anthropic")
     row = await chat_repo.create_conversation(
         user_id=current_user.id,
         title=payload.title,
-        model=await _resolve_model(payload.model, claude_credentials),
+        model=await _resolve_model(payload.model, credentials, current_user.id),
     )
     logger.bind(
         request_id=getattr(request.state, "request_id", None),
@@ -426,7 +425,7 @@ async def stream_message(
         measured_total = (outcome.input_tokens or 0) + (outcome.output_tokens or 0)
         total_tokens = measured_total or estimate
         assistant_metadata = {
-            "provider": "anthropic" if LLMService.is_anthropic_model(conversation.model) else "ollama",
+            "provider": LLMService.provider_for(conversation.model),
             "model": conversation.model,
             "rag_used": payload.use_rag,
             "source_count": len(sources),
@@ -527,10 +526,7 @@ async def list_chat_models(
     current_user: User = Depends(get_current_user),
     credentials: CredentialService = Depends(get_credential_service),
 ) -> dict:
-    return await LLMService.list_models(
-        ollama=await credentials.resolve(current_user.id, "ollama"),
-        anthropic_credentials=await credentials.resolve(current_user.id, "anthropic"),
-    )
+    return await LLMService.list_models(await _credentials_by_provider(credentials, current_user.id))
 
 
 @router.get("/providers/health")
@@ -538,7 +534,4 @@ async def provider_health(
     current_user: User = Depends(get_current_user),
     credentials: CredentialService = Depends(get_credential_service),
 ) -> dict:
-    return await LLMService.provider_health(
-        ollama=await credentials.resolve(current_user.id, "ollama"),
-        anthropic_credentials=await credentials.resolve(current_user.id, "anthropic"),
-    )
+    return await LLMService.provider_health(await _credentials_by_provider(credentials, current_user.id))

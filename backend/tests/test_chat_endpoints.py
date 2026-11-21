@@ -473,7 +473,7 @@ def test_list_messages_endpoint_with_filters(monkeypatch):
 
 
 def test_models_endpoint(monkeypatch):
-    async def fake_list_models(cls, **kwargs):
+    async def fake_list_models(cls, *args, **kwargs):
         return {
             "ollama": [{"id": "llama3.2:3b-instruct-q4_K_M", "provider": "ollama"}],
             "anthropic": [{"id": "claude-sonnet-4-6", "provider": "anthropic"}],
@@ -492,7 +492,7 @@ def test_models_endpoint(monkeypatch):
 
 
 def test_provider_health_endpoint(monkeypatch):
-    async def fake_provider_health(cls, **kwargs):
+    async def fake_provider_health(cls, *args, **kwargs):
         return {
             "ollama": {"healthy": True, "circuit_open": False},
             "anthropic": {"healthy": False, "circuit_open": True},
