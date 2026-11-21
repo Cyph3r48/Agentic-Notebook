@@ -5,10 +5,12 @@ from __future__ import annotations
 from app.services.llm.anthropic_provider import AnthropicProvider
 from app.services.llm.base import LLMProvider
 from app.services.llm.ollama_provider import OllamaProvider
+from app.services.llm.openai_provider import OpenAIProvider
 
 # Display order, and the only place provider ids are listed.
 _PROVIDERS: dict[str, LLMProvider] = {
     "anthropic": AnthropicProvider(),
+    "openai": OpenAIProvider(),
     "ollama": OllamaProvider(),
 }
 PROVIDER_IDS: tuple[str, ...] = tuple(_PROVIDERS)

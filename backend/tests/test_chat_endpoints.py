@@ -11,6 +11,10 @@ from fastapi.testclient import TestClient
 from app.api.deps import db_session, get_credential_service, get_current_user, get_memory_provider
 from app.api.v1.endpoints import chat as chat_module
 from app.api.v1.endpoints.chat import router
+from app.services.llm.anthropic_provider import AnthropicProvider
+from app.services.llm.ollama_provider import OllamaProvider
+from app.services.llm.openai_provider import OpenAIProvider
+from app.services.llm_service import ProviderCredentials
 from conftest import FakeMemory
 
 
@@ -39,13 +43,13 @@ def _empty_history(monkeypatch):
     monkeypatch.setattr(chat_module.ChatRepository, "list_recent_messages", fake_list_recent_messages)
 
 
-def _build_test_client(memory=None) -> TestClient:
+def _build_test_client(memory=None, credentials=None) -> TestClient:
     memory = memory if memory is not None else FakeMemory()
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = _fake_user
-    app.dependency_overrides[get_credential_service] = lambda: _NoCredentials()
+    app.dependency_overrides[get_credential_service] = lambda: credentials or _NoCredentials()
     app.dependency_overrides[get_memory_provider] = lambda: memory
     return TestClient(app)
 
@@ -533,3 +537,69 @@ def test_update_conversation_endpoint(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["title"] == "Renamed"
+
+
+class _OpenAIKeyOnly:
+    """A user who saved an OpenAI key and nothing else."""
+
+    async def resolve(self, user_id, provider):
+        if provider == "openai":
+            return ProviderCredentials(api_key="sk-openai-test-1234", source="user", owner=str(user_id))
+        return None
+
+
+def test_creating_an_openai_conversation_without_a_key_is_a_clear_400():
+    with _build_test_client() as client:
+        response = client.post("/chat/conversations", json={"title": "t", "model": "gpt-5.5"})
+
+    assert response.status_code == 400
+    assert "Add one in Settings" in response.json()["detail"]
+
+
+def test_creating_an_openai_conversation_checks_the_model_against_the_users_list(monkeypatch):
+    created = {}
+
+    async def fake_create_conversation(self, *, user_id, title, model):
+        created["model"] = model
+        return SimpleNamespace(
+            id=uuid4(), title=title, model=model,
+            created_at=datetime.now(tz=timezone.utc), updated_at=datetime.now(tz=timezone.utc),
+        )
+
+    async def fake_catalog(cls, credentials=None):
+        assert credentials.api_key == "sk-openai-test-1234"  # this user's key, not another provider's
+        return [{"id": "gpt-5.4", "name": "gpt-5.4"}]
+
+    monkeypatch.setattr(chat_module.ChatRepository, "create_conversation", fake_create_conversation)
+    monkeypatch.setattr(OpenAIProvider, "model_catalog", classmethod(fake_catalog))
+
+    with _build_test_client(credentials=_OpenAIKeyOnly()) as client:
+        ok = client.post("/chat/conversations", json={"title": "t", "model": "gpt-5.4"})
+        bad = client.post("/chat/conversations", json={"title": "t", "model": "gpt-9-nope"})
+
+    assert ok.status_code == 201 and created["model"] == "gpt-5.4"
+    assert bad.status_code == 400 and "Unsupported OpenAI model" in bad.json()["detail"]
+
+
+def test_models_and_health_include_openai_for_the_user(monkeypatch):
+    async def fake_catalog(cls, credentials=None):
+        return [{"id": "gpt-5.5", "name": "gpt-5.5"}] if credentials else []
+
+    async def no_models(cls, credentials=None):
+        return []
+
+    monkeypatch.setattr(OpenAIProvider, "model_catalog", classmethod(fake_catalog))
+    monkeypatch.setattr(OllamaProvider, "list_models", classmethod(no_models))
+    monkeypatch.setattr(AnthropicProvider, "model_catalog", classmethod(lambda cls, credentials=None: _async([])))
+
+    with _build_test_client(credentials=_OpenAIKeyOnly()) as client:
+        models = client.get("/chat/models").json()
+        health = client.get("/chat/providers/health").json()
+
+    assert models["openai"] == [{"id": "gpt-5.5", "name": "gpt-5.5", "provider": "openai"}]
+    assert health["openai"]["healthy"] is True and health["openai"]["circuit_open"] is False
+    assert health["anthropic"]["healthy"] is False
+
+
+async def _async(value):
+    return value

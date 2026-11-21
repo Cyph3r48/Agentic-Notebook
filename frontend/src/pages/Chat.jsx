@@ -243,6 +243,13 @@ const ConversationItem = ({ conversation, isActive, onClick, onDelete, onRename 
 }
 
 // Model selector dropdown
+// One group per provider in the model list. The server decides which providers have models for this user.
+const MODEL_GROUPS = [
+  { key: 'ollama', label: 'Local Models (Ollama)', selectedClass: 'bg-blue-500/20 text-blue-400' },
+  { key: 'anthropic', label: 'Claude API', selectedClass: 'bg-orange-500/20 text-orange-400' },
+  { key: 'openai', label: 'OpenAI', selectedClass: 'bg-green-500/20 text-green-400' },
+]
+
 const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef(null)
@@ -266,9 +273,9 @@ const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
     )
   }
 
-  const selectedModel = models?.ollama?.find(m => m.id === selected) || 
-                       models?.anthropic?.find(m => m.id === selected) ||
-                       { name: selected }
+  const selectedModel =
+    MODEL_GROUPS.map((group) => models?.[group.key]?.find((m) => m.id === selected)).find(Boolean) ||
+    { name: selected }
 
   return (
     <div ref={containerRef} className="relative">
@@ -287,14 +294,14 @@ const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="absolute bottom-full mb-2 left-0 w-64 bg-surface-card border border-white/10 rounded-lg shadow-xl overflow-hidden z-50"
+            className="absolute bottom-full mb-2 left-0 w-64 max-h-96 overflow-y-auto bg-surface-card border border-white/10 rounded-lg shadow-xl z-50"
           >
-            {models.ollama?.length > 0 && (
-              <div className="p-2">
+            {MODEL_GROUPS.filter((group) => models[group.key]?.length > 0).map((group, index) => (
+              <div key={group.key} className={`p-2 ${index > 0 ? 'border-t border-white/10' : ''}`}>
                 <p className="px-2 py-1 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Local Models (Ollama)
+                  {group.label}
                 </p>
-                {models.ollama.map((model) => (
+                {models[group.key].map((model) => (
                   <button
                     key={model.id}
                     onClick={() => {
@@ -303,7 +310,7 @@ const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
                     }}
                     className={`
                       w-full px-2 py-2 rounded text-left text-sm flex items-center justify-between
-                      ${selected === model.id ? 'bg-blue-500/20 text-blue-400' : 'hover:bg-white/5'}
+                      ${selected === model.id ? group.selectedClass : 'hover:bg-white/5'}
                     `}
                   >
                     {model.name}
@@ -311,31 +318,7 @@ const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
                   </button>
                 ))}
               </div>
-            )}
-
-            {models.anthropic?.length > 0 && (
-              <div className="p-2 border-t border-white/10">
-                <p className="px-2 py-1 text-xs font-medium text-gray-500 uppercase tracking-wider">
-                  Claude API
-                </p>
-                {models.anthropic.map((model) => (
-                  <button
-                    key={model.id}
-                    onClick={() => {
-                      onSelect(model.id)
-                      setIsOpen(false)
-                    }}
-                    className={`
-                      w-full px-2 py-2 rounded text-left text-sm flex items-center justify-between
-                      ${selected === model.id ? 'bg-orange-500/20 text-orange-400' : 'hover:bg-white/5'}
-                    `}
-                  >
-                    {model.name}
-                    {selected === model.id && <Check className="w-4 h-4" />}
-                  </button>
-                ))}
-              </div>
-            )}
+            ))}
           </motion.div>
         )}
       </AnimatePresence>

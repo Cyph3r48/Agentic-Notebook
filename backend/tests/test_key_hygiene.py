@@ -15,6 +15,7 @@ from app.main import app
 from app.schemas.provider_settings import ProviderSaveRequest
 from app.services.credential_service import CredentialService
 from app.services.llm.anthropic_provider import AnthropicProvider
+from app.services.llm.openai_provider import OpenAIProvider
 from app.services.llm_service import LLMService, ProviderCredentials
 
 SENTINEL = "sk-ant-test-SENTINEL-hygiene-0001"
@@ -90,3 +91,40 @@ async def test_a_failing_provider_call_logs_no_key(captured_logs, monkeypatch):
     assert captured_logs, "the failure should have been logged"
     assert not any(SENTINEL in line for line in captured_logs)
     assert SENTINEL not in str(metadata)
+
+
+OPENAI_SENTINEL = "sk-openai-test-SENTINEL-hygiene-0002"
+
+
+class _FailingOpenAI(_FailingClient):
+    def __init__(self):
+        super().__init__()
+        self.responses = SimpleNamespace(create=self._fail_async)
+
+    @staticmethod
+    async def _fail_async(*args, **kwargs):
+        raise RuntimeError(f"upstream exploded for {OPENAI_SENTINEL}")  # a provider echoing the key back
+
+
+@pytest.mark.asyncio
+async def test_a_failing_openai_call_logs_the_error_class_and_never_the_key_from_results(captured_logs, monkeypatch):
+    monkeypatch.setattr(OpenAIProvider, "_openai_client", classmethod(lambda cls, **kwargs: _FailingOpenAI()))
+    monkeypatch.setattr(OpenAIProvider, "_model_cache", {})
+
+    credentials = ProviderCredentials(api_key=OPENAI_SENTINEL, source="user", owner="u1")
+    _, metadata = await LLMService.generate_chat_reply(
+        model="gpt-5.5", user_message="hi", context_lines=[], credentials=credentials
+    )
+    test = await LLMService.test_connection("openai", credentials)
+
+    assert metadata["error_type"] == "provider_error"
+    assert OPENAI_SENTINEL not in str(metadata) and OPENAI_SENTINEL not in str(test)
+    assert OPENAI_SENTINEL not in repr(credentials)
+
+
+def test_openai_requests_never_carry_the_key_in_the_body():
+    from app.services.llm.base import ChatRequest
+
+    body = OpenAIProvider._request_body(ChatRequest(model="gpt-5.5", user_message="hi", context_lines=[]))
+
+    assert OPENAI_SENTINEL not in str(body) and "api_key" not in body

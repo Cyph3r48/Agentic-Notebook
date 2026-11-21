@@ -284,4 +284,10 @@ The owner said to use defaults and not stop, so these are assumed and should be 
 
 ## AMENDMENTS
 
-- (none yet)
+- 2026-11-21 - Adapter modules are named `*_provider.py` (`anthropic_provider.py`, `ollama_provider.py`, `openai_provider.py`) so they do not share a name with the SDK packages they import.
+- 2026-11-21 - The circuit breaker stays on the `LLMService` façade instead of moving to `common.py`: it is provider-agnostic, keyed by provider and credential, and tests assert on its state. Behaviour is unchanged.
+- 2026-11-21 - Added `accepts_base_url` to the provider interface so the credential service no longer names Ollama; `_TEST_DETAIL` moved to `common.TEST_DETAIL` and gained `provider_quota_exceeded`.
+- 2026-11-21 - The OpenAI adapter takes its key only from the credentials it is given (the server-wide key arrives through `server_credentials()`), so `ALLOW_SERVER_PROVIDER_KEYS=false` is honoured. The Anthropic adapter was left as it was and still falls back to `CLAUDE_API_KEY` (recorded as known bug 14).
+- 2026-11-21 - `resolve_model` for OpenAI with no saved key raises a clear message ("Add one in Settings") instead of accepting the default id.
+- 2026-11-21 - Found and fixed: Settings called `useProviderHealth()` with no token while the hook only ran when given one, so every provider badge read "not configured". The hook no longer waits for a token.
+- 2026-11-21 - Provider status for OpenAI shows a "Key saved" badge (health reports that a key exists, not that it works; the Test button proves that).

@@ -680,9 +680,10 @@ async def test_connection_test_for_claude(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_connection_test_without_a_claude_key_or_for_openai():
+async def test_connection_test_without_a_key_and_for_an_unknown_provider():
     assert (await LLMService.test_connection("anthropic", None))["error_type"] == "not_configured"
-    assert (await LLMService.test_connection("openai", _user_creds("sk-openai-test-9999")))["error_type"] == "provider_not_supported"
+    assert (await LLMService.test_connection("openai", None))["error_type"] == "not_configured"
+    assert (await LLMService.test_connection("mistral", _user_creds("sk-x-test-9999")))["error_type"] == "provider_not_supported"
 
 
 @pytest.mark.asyncio

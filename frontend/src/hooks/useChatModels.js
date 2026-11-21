@@ -10,11 +10,12 @@ export const useChatModels = (token) => {
   })
 }
 
-export const useProviderHealth = (token) => {
+// The Settings page calls this without a token, and the API client attaches the login token itself, so
+// the query must not wait for one (it used to stay disabled and every badge read "not configured").
+export const useProviderHealth = () => {
   return useQuery({
     queryKey: ['provider-health'],
     queryFn: chatAPI.getProviderHealth,
-    enabled: !!token,
     staleTime: 30 * 1000, // 30 seconds
   })
 }

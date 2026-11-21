@@ -420,6 +420,55 @@ export const Settings = () => {
                 onChanged={refreshProviders}
               />
             </div>
+
+            {/* OpenAI Section */}
+            <div className="p-4 rounded-lg bg-white/5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-5 h-5 rounded bg-green-600 flex items-center justify-center text-xs font-bold">
+                    O
+                  </div>
+                  <div>
+                    <p className="font-medium">OpenAI (Optional)</p>
+                    <p className="text-sm text-gray-400">Use OpenAI models for chat</p>
+                  </div>
+                </div>
+                {isLoadingHealth ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                ) : (health?.openai?.healthy ?? health?.openai?.ok) ? (
+                  <StatusBadge status="online" text="Key saved" />
+                ) : (
+                  <StatusBadge status="warning" text="Not Configured" />
+                )}
+              </div>
+
+              <ProviderKeyFields
+                provider="openai"
+                status={providerStatus('openai')}
+                placeholder="sk-..."
+                helpUrl="https://platform.openai.com/api-keys"
+                helpLabel="Get API key"
+                onChanged={refreshProviders}
+              />
+
+              {models?.openai?.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-sm text-gray-400 mb-2">Available models:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {models.openai.map((model) => (
+                      <span key={model.id} className="px-3 py-1 rounded-full bg-white/10 text-sm">
+                        {model.name || model.id}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <p className="mt-3 text-xs text-gray-500">
+                Requests ask OpenAI not to store the response. Read OpenAI&apos;s data controls documentation before
+                sending sensitive documents.
+              </p>
+            </div>
           </div>
         </SettingsSection>
 

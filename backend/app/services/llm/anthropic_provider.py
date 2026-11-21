@@ -32,6 +32,7 @@ from app.services.llm.common import (
 class AnthropicProvider:
     id = "anthropic"
     always_available = False
+    accepts_base_url = False
 
     # Live Claude model lists, cached per credential so one user's list is never served to another.
     _model_cache: dict[str, tuple[float, list[dict[str, str]]]] = {}

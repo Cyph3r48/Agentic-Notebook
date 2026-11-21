@@ -123,7 +123,8 @@ class CredentialService:
         if api_key is None and not base_url_provided:
             raise ValueError("Nothing to save: send an api_key and/or a base_url")
         if base_url_provided:
-            if provider != "ollama":
+            adapter = get_provider(provider)
+            if adapter is None or not adapter.accepts_base_url:
                 raise ValueError("Only Ollama has a base URL")
             if getattr(user, "role", None) != "admin":
                 raise PermissionError("Only an admin can set the Ollama URL")

@@ -27,6 +27,7 @@ OLLAMA_RETRY_DELAY_SECONDS = 0.5
 class OllamaProvider:
     id = "ollama"
     always_available = True  # the server's OLLAMA_URL is always there
+    accepts_base_url = True
 
     @staticmethod
     def owns(model: str) -> bool:

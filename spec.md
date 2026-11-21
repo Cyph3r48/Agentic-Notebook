@@ -47,7 +47,7 @@ React (Vite) ── nginx ── FastAPI backend ──┬── ProviderRegistr
 
 Existing and working today: FastAPI, Postgres + Alembic migrations, Redis, JWT auth, document ingestion and chunking, chat + SSE streaming, citations, React UI, Docker Compose, backend CI.
 
-### 3.1 Provider layer (planned)
+### 3.1 Provider layer (built for Anthropic, OpenAI and Ollama)
 
 Replace the `startswith("claude-")` routing in `backend/app/services/llm_service.py` with a `LLMProvider` interface and a registry:
 
@@ -61,7 +61,9 @@ Replace the `startswith("claude-")` routing in `backend/app/services/llm_service
 Status (2026-10-08): the history, timeout, model-ID and Anthropic-SDK parts are done inside `LLMService` (see `progress.md`). That
 code is the starting point for the adapters: `StreamOutcome` already carries stop reason, real token usage and normalized
 `error_type` values (`provider_timeout`, `provider_auth_error`, `provider_rate_limited`, `provider_http_error`, `provider_refusal`,
-`provider_error`). The `LLMProvider` interface, the registry, OpenAI and Ollama cloud are still open.
+`provider_error`).
+
+Status (2026-11-21): the `LLMProvider` interface and registry live in `backend/app/services/llm/` (`base.py`, `common.py`, `registry.py`, `anthropic_provider.py`, `ollama_provider.py`, `openai_provider.py`). `LLMService` is the façade; endpoints and the credential service name no providers (a test enforces it). OpenAI uses the Responses API with streaming and always sends `store=false`; `provider_quota_exceeded` is a new normalized error for an out-of-credit account. Provider is still inferred from the model id (`claude-`, then `gpt-`/`o<digit>`/`chatgpt-` without a colon, else Ollama); a stored per-conversation provider and Ollama Cloud as its own provider are planned in `.claude/plans/model-selection-and-embeddings.md`. Cross-provider fallback and the sensitivity gate are still open.
 
 ### 3.2 Settings (provider keys built, rest planned)
 

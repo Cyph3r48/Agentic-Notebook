@@ -157,7 +157,58 @@ async def test_delete_removes_the_row(credential_repo, master_key):
 
 
 @pytest.mark.asyncio
-async def test_openai_keys_can_be_stored_but_are_marked_unsupported(credential_repo, master_key):
+async def test_openai_keys_can_be_stored_and_the_provider_is_supported(credential_repo, master_key):
     service, user = _service(credential_repo, master_key), _user()
     status = await service.save(user, "openai", api_key="sk-openai-test-9999", base_url=None, base_url_provided=False)
-    assert status.supported is False and status.configured is True
+    assert status.supported is True and status.configured is True and status.key_hint == "9999"
+
+
+@pytest.mark.asyncio
+async def test_openai_resolution_order_user_then_server_then_none(credential_repo, master_key, monkeypatch):
+    service, user = _service(credential_repo, master_key), _user()
+    assert await service.resolve(user.id, "openai") is None
+    assert (await service.status_for(user.id, "openai")).source == "none"
+
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-server-wide-key-3333")
+    server = await service.resolve(user.id, "openai")
+    assert server.api_key == "sk-server-wide-key-3333" and server.source == "server"
+    assert (await service.status_for(user.id, "openai")).source == "server"
+
+    await service.save(user, "openai", api_key=SENTINEL, base_url=None, base_url_provided=False)
+    mine = await service.resolve(user.id, "openai")
+    assert mine.api_key == SENTINEL and mine.source == "user"
+
+
+@pytest.mark.asyncio
+async def test_openai_server_key_fallback_can_be_switched_off(credential_repo, master_key, monkeypatch):
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-server-wide-key-3333")
+    monkeypatch.setattr(settings, "ALLOW_SERVER_PROVIDER_KEYS", False)
+    service, user = _service(credential_repo, master_key), _user()
+
+    assert await service.resolve(user.id, "openai") is None
+    assert (await service.status_for(user.id, "openai")).configured is False
+
+
+@pytest.mark.asyncio
+async def test_a_base_url_can_be_saved_only_for_providers_that_accept_one(credential_repo, master_key):
+    service = _service(credential_repo, master_key)
+    admin = SimpleNamespace(id=uuid4(), role="admin")
+
+    with pytest.raises(ValueError, match="Only Ollama has a base URL"):
+        await service.save(admin, "openai", api_key=None, base_url="https://example.com", base_url_provided=True)
+    status = await service.save(admin, "ollama", api_key=None, base_url="http://localhost:11434", base_url_provided=True)
+    assert status.base_url == "http://localhost:11434"
+
+
+@pytest.mark.asyncio
+async def test_openai_key_is_encrypted_in_storage_and_bound_to_its_owner(credential_repo, master_key):
+    service, user = _service(credential_repo, master_key), _user()
+    await service.save(user, "openai", api_key=SENTINEL, base_url=None, base_url_provided=False)
+
+    stored = credential_repo.rows[(user.id, "openai")].api_key_encrypted
+    assert SENTINEL not in stored
+
+    # The same ciphertext copied under another user or provider does not decrypt.
+    other = _user()
+    credential_repo.rows[(other.id, "openai")] = credential_repo.rows[(user.id, "openai")]
+    assert await service.resolve(other.id, "openai") is None

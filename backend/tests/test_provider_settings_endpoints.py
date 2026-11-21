@@ -44,7 +44,7 @@ def test_list_reports_all_three_providers(api):
     by_name = {item["provider"]: item for item in body}
     assert by_name["anthropic"]["configured"] is False and by_name["anthropic"]["source"] == "none"
     assert by_name["ollama"]["source"] == "server"
-    assert by_name["openai"]["supported"] is False
+    assert by_name["openai"]["supported"] is True and by_name["openai"]["source"] == "none"
 
 
 def test_saving_a_key_returns_a_hint_and_never_the_key(api, credential_repo):

@@ -78,6 +78,24 @@ class Settings(BaseSettings):
     CLAUDE_MAX_OUTPUT_TOKENS: int = Field(default=16000)
     ANTHROPIC_REQUEST_TIMEOUT_SECONDS: float = Field(default=600.0)
 
+    # OpenAI (Optional). Users normally save their own key in Settings; this is the server-wide fallback.
+    OPENAI_API_KEY: str = Field(default="")
+    # Used when the live model list cannot be read. The live list from the user's own key is what they pick from.
+    OPENAI_DEFAULT_MODEL: str = Field(default="gpt-5.5")
+    OPENAI_MAX_OUTPUT_TOKENS: int = Field(default=16000)
+    OPENAI_REQUEST_TIMEOUT_SECONDS: float = Field(default=600.0)
+    # Empty means "send nothing": which effort levels a model accepts differs by model.
+    OPENAI_REASONING_EFFORT: str = Field(default="")
+
+    @field_validator("OPENAI_REASONING_EFFORT")
+    @classmethod
+    def validate_openai_reasoning_effort(cls, v: str) -> str:
+        allowed = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+        value = v.strip().lower()
+        if value and value not in allowed:
+            raise ValueError(f"OPENAI_REASONING_EFFORT must be empty or one of {sorted(allowed)}")
+        return value
+
     # Chat history sent with each turn, and how long the live model list is cached.
     LLM_HISTORY_MESSAGES: int = Field(default=12)
     LLM_HISTORY_MAX_CHARS: int = Field(default=24000)

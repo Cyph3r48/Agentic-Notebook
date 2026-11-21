@@ -69,6 +69,8 @@ class LLMProvider(Protocol):
     id: str
     # True when the provider works without any saved credential (a local Ollama).
     always_available: bool
+    # True when an admin may point the provider at another server (a local Ollama); false for hosted APIs.
+    accepts_base_url: bool
 
     def owns(self, model: str) -> bool: ...
 

@@ -43,7 +43,7 @@ Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` and change the passwor
 
 - **Ollama:** set `OLLAMA_URL` (default `http://host.docker.internal:11434`) and pull a model, e.g. `ollama pull llama3.2:3b-instruct-q4_K_M`.
 - **Claude:** paste your key in Settings (see below), or set a server-wide `CLAUDE_API_KEY` in `.env`. The default models are `claude-sonnet-5-5`, `claude-opus-5-5` and `claude-haiku-5-5` (hyphens, no date suffix). With a key set, the model list also comes live from the Anthropic Models API. Tune `CLAUDE_EFFORT` (`low` to `max`) for speed versus depth.
-- **OpenAI:** not wired yet.
+- **OpenAI:** paste your key in Settings (or set a server-wide `OPENAI_API_KEY`). The model list comes live from your key; `OPENAI_DEFAULT_MODEL` is the fallback if it cannot be read. Chat uses OpenAI's Responses API, and every request asks OpenAI not to store the response (`store=false`, since OpenAI's default is to keep responses for at least 30 days). The app makes no other claim about how OpenAI handles your data; read OpenAI's data controls documentation before sending sensitive documents. Sensitive-content controls (which providers may see what) are not built yet.
 
 Never commit `.env`. API credits and keys belong to the provider account that issued them.
 
