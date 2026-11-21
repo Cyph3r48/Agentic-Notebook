@@ -12,6 +12,8 @@ from app.core.database import get_db_session
 from app.core.redis_client import get_redis
 from app.core.security import decode_access_token
 from app.models import User
+from app.repositories import CredentialRepository
+from app.services.credential_service import CredentialService
 
 
 security = HTTPBearer(auto_error=False)
@@ -24,6 +26,10 @@ async def db_session() -> AsyncGenerator[AsyncSession, None]:
 
 def redis_client():
     return get_redis()
+
+
+def get_credential_service(session: AsyncSession = Depends(db_session)) -> CredentialService:
+    return CredentialService(CredentialRepository(session))
 
 
 async def get_current_user(

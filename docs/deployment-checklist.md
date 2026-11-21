@@ -346,6 +346,6 @@ print(result)
 
 For support, see:
 - README.md for general documentation
-- PROJECT_OVERVIEW.md for architecture details
+- project-overview.md for architecture details
 - Docker logs: `docker compose logs -f`
 - Health check: http://localhost:8000/health

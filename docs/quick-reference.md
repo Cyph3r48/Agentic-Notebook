@@ -360,5 +360,5 @@ CHUNK_OVERLAP=400
 
 **Need Help?**
 - Check logs: `docker compose logs -f`
-- Review docs: `README.md`, `PROJECT_OVERVIEW.md`
-- Deployment guide: `DEPLOYMENT_CHECKLIST.md`
+- Review docs: `README.md`, `project-overview.md`
+- Deployment guide: `deployment-checklist.md`

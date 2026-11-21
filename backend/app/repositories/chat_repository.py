@@ -112,6 +112,21 @@ class ChatRepository:
             )
         ).all()
 
+    async def list_recent_messages(self, *, conversation_id: UUID, limit: int) -> list[Message]:
+        """Newest `limit` user/assistant messages, returned oldest first.
+
+        Callers decide which rows are usable as chat history (for example, skipping errored replies).
+        """
+        rows = (
+            await self.session.scalars(
+                select(Message)
+                .where(Message.conversation_id == conversation_id, Message.role.in_(("user", "assistant")))
+                .order_by(desc(Message.created_at))
+                .limit(limit)
+            )
+        ).all()
+        return list(reversed(rows))
+
     async def list_messages_for_conversation_paginated(
         self,
         *,

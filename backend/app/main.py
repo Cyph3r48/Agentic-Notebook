@@ -220,7 +220,9 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
             error="Validation Error",
             message="Request validation failed",
             request_id=getattr(request.state, "request_id", None),
-            details={"errors": exc.errors()},
+            # Never return the submitted value (`input`): a rejected request may carry an API key. `ctx` can hold
+            # exception objects that are not JSON serializable, and `url` is documentation noise.
+            details={"errors": [{k: v for k, v in err.items() if k not in ("input", "ctx", "url")} for err in exc.errors()]},
         ),
     )
 

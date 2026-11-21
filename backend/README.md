@@ -13,8 +13,8 @@ OLLAMA_URL=http://host.docker.internal:11434
 DEFAULT_MODEL=llama3.2:3b-instruct-q4_K_M
 
 CLAUDE_API_KEY=your_anthropic_api_key
-CLAUDE_SONNET_MODEL=claude-sonnet-4.6
-CLAUDE_OPUS_MODEL=claude-opus-4.6
+CLAUDE_SONNET_MODEL=claude-sonnet-5-5
+CLAUDE_OPUS_MODEL=claude-opus-5-5
 ```
 
 `/api/v1/chat/conversations` accepts `model` and enforces Anthropic model allowlist from

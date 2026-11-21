@@ -1,3 +1,5 @@
+> **Status: archived.** Written 2026-02-12 before most of the code existed. The current source of truth is `spec.md` and `progress.md` at the repo root.
+
 # Codebase Concerns
 
 **Analysis Date:** 2026-02-12
