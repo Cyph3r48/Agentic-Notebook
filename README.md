@@ -47,6 +47,15 @@ Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` and change the passwor
 
 Never commit `.env`. API credits and keys belong to the provider account that issued them.
 
+### Document memory
+
+Search works from the first start. Uploads are indexed in Postgres (keyword search) and, by default, in Qdrant with embeddings from the bundled TEI service (vector search). The first start downloads the embedding model, which can take a few minutes; until it is ready, search uses keywords only. **Settings > Memory** shows which mode you are in and why. Chat answers that fell back to keywords say so.
+
+- `VECTOR_INDEXING_ENABLED=false` turns vector search off (about 2 GB less memory).
+- Documents are sent to the embedding service at `EMBEDDING_URL`. The default is the local container; pointing it at an outside service sends your documents there.
+- Documents uploaded while vectors were off are not indexed retroactively yet. Re-upload them after turning vectors on.
+- `MEMORY_BACKEND` accepts `builtin` only for now; `smc` and `http` are reserved and stop the app at startup with a clear message.
+
 ### Where your API keys live
 
 - The master key, `SECRETS_ENCRYPTION_KEY`, goes in your local env file only. Generate it with `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`. Back it up: if you lose it, saved keys cannot be read and must be entered again.

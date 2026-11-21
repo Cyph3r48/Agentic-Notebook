@@ -17,6 +17,7 @@ import {
   Edit2,
   Sparkles,
   MessageCircle,
+  AlertCircle,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useConversations } from '../hooks/useConversations'
@@ -76,6 +77,13 @@ const ChatMessage = ({ message, isLast }) => {
                 ) : null)}
               </div>
             </div>
+
+            {message.metadata?.memory_mode === 'keyword_fallback' && (
+              <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-yellow-400 bg-yellow-400/10 px-2 py-1 rounded-md">
+                <AlertCircle className="w-3.5 h-3.5" />
+                Keyword search only: vector search was unavailable for this answer
+              </p>
+            )}
 
             {/* Sources */}
             {hasSources && (
@@ -460,6 +468,7 @@ export const Chat = () => {
           if (tempAssistantId) {
             updateMessageForConversation(currentConversationId, tempAssistantId, {
               sources: event.data?.sources || [],
+              metadata: event.data?.metadata,
             })
           }
           break

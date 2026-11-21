@@ -108,12 +108,13 @@ v1 requirement: all five layers are on the request path, covered by tests, and P
 The agent depends only on a `MemoryProvider` interface. Selected with `MEMORY_BACKEND=builtin|smc|http`.
 
 ```
-ingest(user_id, document) -> document_id
-search(user_id, query, limit, filters) -> [Chunk{document_id, chunk_index, content, score, source, content_hash, span}]
-get(user_id, document_id) -> Document
+ingest(user_id, document_id, original_filename, chunks) -> IngestOutcome{id_map, vector_indexed, error}
+search(user_id, query, limit, offset, min_score) -> SearchOutcome{results: [MemoryChunk], mode, degraded_reason}
 delete(user_id, document_id)
-health() -> {status, detail}
+health() -> MemoryHealth{status: ok|degraded|down|disabled, components, last_error}
 ```
+
+`mode` is `vector`, `keyword` (vectors off, or no vector hits) or `keyword_fallback` (the vector path failed; the reason is logged at warning, kept for health, and stored on the chat reply). A failed vector index never fails an upload; the document records `vector_indexed`. `get` was dropped: documents live in Postgres and nothing needs a provider-level read yet. Code: `backend/app/services/memory/`; status at `GET /api/v1/memory/health`.
 
 | Backend | Description |
 |---|---|
@@ -121,7 +122,7 @@ health() -> {status, detail}
 | `smc` | The author's Structured Memory Core. Adapter to be designed once the SMC's access method is confirmed (HTTP, MCP, or shared Postgres tables). |
 | `http` / `mcp` | Generic adapter so anyone can point the app at their own memory or RAG service. |
 
-Out-of-the-box requirements for `builtin` (planned fixes in `progress.md`): vector indexing on by default, a real health check for Qdrant and TEI, and a UI indicator when search has fallen back to keyword-only.
+Out-of-the-box requirements for `builtin` (built): vector indexing on by default, a real health check for Qdrant and TEI (including the embedding size), and a UI indicator when search has fallen back to keyword-only.
 
 ## 6. Quality bar
 

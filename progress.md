@@ -14,7 +14,7 @@ Still not run: `docker compose up` itself (image builds, nginx, TEI, Qdrant), a 
 
 The owner deleted their local copy of the repo; the only copy is on GitHub, branch `claude/festive-hamilton-e2cy6w` (not merged into `master`, no PR opened). To work locally: clone, check out that branch, copy the env template to a local env file (git-ignored) and fill it in there. No key is ever committed; a scan of every commit on every branch found no key-shaped strings.
 
-2026-11-21 (later): planned the next ticket, `MemoryProvider` with a default-on `builtin` backend, in `.claude/plans/memory-provider-builtin.md` (fixes most of known bug 7). Assumptions are listed in the plan; nothing implemented yet. Next step: `piv-implement` on that plan.
+2026-11-21 (later): `MemoryProvider` with a default-on `builtin` backend is implemented (plan: `.claude/plans/memory-provider-builtin.md`), unit-tested and run by hand against real Postgres, Redis and Qdrant with a stand-in embedding service. Not run: Docker, the real TEI image, a real Claude or Ollama reply. Next step: owner runs `docker compose up` on a clean clone, then the `LLMProvider` interface and OpenAI adapter.
 
 ## Done (in the code today)
 
@@ -34,7 +34,7 @@ Fix these before building new features. Struck-through items are fixed in code (
 4. ~~**No conversation history**~~ FIXED is sent to the model; each turn is a single prompt.
 5. **Security layers unwired**: `pi_guard_check`, `check_tool_permission`, `audit_log`, `verify_integrity` are never called on request paths.
 6. **PI Guard threshold**: score = matches / 16 patterns, passes if < 0.1, so one match (0.0625) passes.
-7. **Vector search is off by default** (`VECTOR_INDEXING_ENABLED=false`) and all Qdrant/embedding errors are swallowed at debug level, so failures look like worse answers. Qdrant results ignore `min_score`; `client.search` is deprecated in newer qdrant-client.
+7. ~~**Vector search is off by default**~~ MOSTLY FIXED (default-on, errors logged at warning and shown in Settings > Memory, `min_score` applied, newer Qdrant API; Qdrant point ids were also invalid and never worked). Original note: (`VECTOR_INDEXING_ENABLED=false`) and all Qdrant/embedding errors are swallowed at debug level, so failures look like worse answers. Qdrant results ignore `min_score`; `client.search` is deprecated in newer qdrant-client.
 8. **Dependencies**: `openai` is in `requirements.txt` but unused (`anthropic` is now used and bumped to 1.12.1); `torch`, `transformers` and `sentence-transformers` are heavy and likely unnecessary since embeddings go through TEI. `hashlib-additional` looks unnecessary.
 9. **Defaults**: placeholder admin and DB passwords in `config.py`; random JWT secret per start invalidates sessions on restart.
 10. **Stale config naming**: README and `.env.template` describe a Claude-only fallback; no OpenAI settings exist.
@@ -48,7 +48,7 @@ Fix these before building new features. Struck-through items are fixed in code (
 2. [x] Fix known bugs 1, 2, 4 (timeouts, model IDs, history) with tests. [x] Bug 3 (plus 12, 13): server-side encrypted provider keys + Settings page; awaiting owner's manual test.
 3. [ ] `LLMProvider` interface + registry; port Anthropic and Ollama; add OpenAI; Ollama cloud.
 4. [~] Settings page: server-side encrypted keys and Test done; provider/model picker still open.
-5. [ ] `MemoryProvider` interface; wrap current Postgres/Qdrant code as `builtin`; vector path default-on with real health check and UI indicator.
+5. [x] `MemoryProvider` interface; current Postgres/Qdrant code wrapped as `builtin`; vector path default-on with real health check and UI indicator. Left: re-index documents uploaded while vectors were off.
 6. [ ] `DecisionService` client for the Laya service that already runs on the owner's VPS (no sidecar needed; see `spec.md` 3.3 and its open questions); first decisions: retrieval gate, sensitivity gate; measure latency/accuracy on real data.
 7. [ ] Wire all five SMC layers into the chat and ingest paths with tests.
 8. [ ] Model routing and agent loop.
@@ -72,6 +72,8 @@ Fix these before building new features. Struck-through items are fixed in code (
 
 ### Validation baseline (native, no Docker daemon)
 
+- 2026-11-21, after the memory ticket: **172 passed, 15 skipped, 4 failed** (same 4 env failures). 12 deliberate breaks, all caught. `ruff` and `npm run lint` clean; `npm run build` passes. Run by hand: real Postgres 16 + pgvector, Redis, Qdrant 1.12.5, a stand-in embedding server, headless Chromium. Not run: Docker, real TEI, real Claude/Ollama, frontend tests.
+
 - 2026-10-14, after the keys ticket: **134 passed, 15 skipped, 4 failed** (same 4 env failures). Not run: Docker integration (`RUN_DB_INTEGRATION_TESTS=1`), live Claude/Ollama calls, type checking, frontend tests, `npm run build` (fails before this change).
 
 - 2026-10-08, after the LLM ticket: **87 passed, 14 skipped, 4 failed**. The same 4 failures as before (`tests/test_auth_endpoints.py::{test_login_success, test_refresh_success, test_logout_success, test_login_invalid_credentials_payload_shape}`, they need the `postgres` host); 36 tests added (`test_llm_service.py`, `test_chat_history.py`). Skips need Postgres/Redis.
@@ -90,3 +92,4 @@ Fix these before building new features. Struck-through items are fixed in code (
 - 2026-10-12 (later) — Owner accepted all six defaults. Wrote `.claude/plans/server-side-provider-keys.md` (Fernet-encrypted per-user keys, master key only in the local env file, per-credential caches and breakers, authenticated model list and health, sanitized 422 handler, Settings page rewrite). Checked Ollama Cloud auth in the docs (Bearer key on `https://ollama.com/api`, hosted model names without the `-cloud` suffix). Opened a PR from this branch into `master` for review; not merged.
 - 2026-10-14 — Implemented the keys ticket: `SecretBox` (Fernet, owner-bound), `provider_credentials` table and migration, credential repository and service, `/settings/providers` (list, save, delete, test), per-credential breakers and model caches, authenticated models and health, sanitized 422, `ProviderKeyFields` on the Settings page with a Move-to-server banner. Mutation checks: 9 breaks, all caught. Review loop and commit follow.
 - 2026-11-21 — Clean-clone verification (native, real Postgres/Redis, headless browser). Fixed the production frontend build and first-start migrations. Merged PR #1 into `master` after the check passed.
+- 2026-11-21 — Memory ticket: `services/memory` (interface, `builtin`, registry), `GET /memory/health`, `/ready` vector status, `vector_indexed` on documents, `memory_mode` on chat replies, Settings > Memory card and a chat chip, vectors on by default. Found that Qdrant point ids were invalid (indexing never worked); fixed. Live run: vector search and the Qdrant-down fallback both behave as designed.

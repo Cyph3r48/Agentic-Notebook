@@ -14,6 +14,7 @@ from app.core.security import decode_access_token
 from app.models import User
 from app.repositories import CredentialRepository
 from app.services.credential_service import CredentialService
+from app.services.memory import MemoryBackendUnavailable, MemoryProvider, get_memory_provider as _select_memory
 
 
 security = HTTPBearer(auto_error=False)
@@ -30,6 +31,13 @@ def redis_client():
 
 def get_credential_service(session: AsyncSession = Depends(db_session)) -> CredentialService:
     return CredentialService(CredentialRepository(session))
+
+
+def get_memory_provider(session: AsyncSession = Depends(db_session)) -> MemoryProvider:
+    try:
+        return _select_memory(session)
+    except MemoryBackendUnavailable as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
 
 
 async def get_current_user(

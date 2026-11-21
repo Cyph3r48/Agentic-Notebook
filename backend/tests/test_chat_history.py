@@ -8,10 +8,11 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import db_session, get_credential_service, get_current_user
+from app.api.deps import db_session, get_credential_service, get_current_user, get_memory_provider
 from app.api.v1.endpoints import chat as chat_module
 from app.api.v1.endpoints.chat import router
 from app.core.config import settings
+from conftest import FakeMemory
 
 
 class _NoCredentials:
@@ -31,6 +32,7 @@ def _client() -> TestClient:
     app.dependency_overrides[db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4(), role="user")
     app.dependency_overrides[get_credential_service] = lambda: _NoCredentials()
+    app.dependency_overrides[get_memory_provider] = lambda: FakeMemory()
     return TestClient(app)
 
 

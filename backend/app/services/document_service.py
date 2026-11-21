@@ -19,13 +19,14 @@ from app.core.config import settings
 from app.models import Document
 from app.repositories import DocumentRepository
 from app.services.smc_service import SMCService
-from app.services.vector_search_service import VectorSearchService
+from app.services.memory import MemoryProvider, get_memory_provider
 
 
 class DocumentService:
-    def __init__(self, session: AsyncSession):
+    def __init__(self, session: AsyncSession, memory: MemoryProvider | None = None):
         self.session = session
         self.repo = DocumentRepository(session)
+        self.memory = memory or get_memory_provider(session)
 
     async def ingest_upload(self, *, user_id: UUID, upload: UploadFile) -> tuple[Document, int]:
         doc, is_new = await self.stage_upload(user_id=user_id, upload=upload)
@@ -143,16 +144,19 @@ class DocumentService:
             sanitized = await SMCService.sanitize_content(extracted, content_type=content_type)
             content_hash = SMCService.compute_hash(sanitized)
             chunks = self._chunk_text(sanitized)
-            vector_service = VectorSearchService(self.session)
-            await vector_service.delete_document_points(user_id=doc.user_id, document_id=doc.id)
-            id_map = await vector_service.index_document_chunks(
+            await self.memory.delete(user_id=doc.user_id, document_id=doc.id)
+            indexed = await self.memory.ingest(
                 user_id=doc.user_id,
                 document_id=doc.id,
                 original_filename=doc.original_filename,
                 chunks=chunks,
             )
             for chunk in chunks:
-                chunk["vector_id"] = id_map.get(int(chunk["chunk_index"]))
+                chunk["vector_id"] = indexed.id_map.get(int(chunk["chunk_index"]))
+            index_metadata: dict = {"vector_indexed": indexed.vector_indexed}
+            if indexed.error:
+                # The document still completes: keyword search works without vectors.
+                index_metadata["vector_index_error"] = indexed.error
             await self.repo.clear_chunks(doc.id)
             if chunks:
                 await self.repo.add_chunks(document_id=doc.id, chunks=chunks)
@@ -163,6 +167,7 @@ class DocumentService:
                     **(doc.metadata_json or {}),
                     "text_length": len(sanitized),
                     "content_hash": content_hash,
+                    **index_metadata,
                 },
                 status="completed",
                 processing_error=None,
@@ -178,7 +183,7 @@ class DocumentService:
         if doc is None:
             return False
 
-        await VectorSearchService(self.session).delete_document_points(user_id=doc.user_id, document_id=doc.id)
+        await self.memory.delete(user_id=doc.user_id, document_id=doc.id)
         await self.repo.delete_document(doc)
         try:
             Path(doc.storage_path).unlink(missing_ok=True)

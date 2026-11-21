@@ -22,6 +22,7 @@ import { useModels } from '../hooks/useChatModels'
 import { useProviderHealth } from '../hooks/useChatModels'
 import { settingsAPI } from '../api/settings'
 import { ProviderKeyFields } from '../components/ProviderKeyFields'
+import { MemoryStatusCard } from '../components/MemoryStatusCard'
 
 // Settings section component
 const SettingsSection = ({ title, description, icon: Icon, children }) => (
@@ -420,6 +421,15 @@ export const Settings = () => {
               />
             </div>
           </div>
+        </SettingsSection>
+
+        {/* Document memory */}
+        <SettingsSection
+          title="Memory"
+          description="Where your documents are indexed and searched"
+          icon={Database}
+        >
+          <MemoryStatusCard />
         </SettingsSection>
 
         {/* Notifications Section */}

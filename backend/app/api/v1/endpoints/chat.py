@@ -10,7 +10,7 @@ from loguru import logger
 from starlette.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import db_session, get_credential_service, get_current_user
+from app.api.deps import db_session, get_credential_service, get_current_user, get_memory_provider
 from app.core.config import settings
 from app.models import User
 from app.repositories import ChatRepository
@@ -24,7 +24,7 @@ from app.schemas.chat import (
 )
 from app.services.credential_service import CredentialService
 from app.services.llm_service import LLMService, ProviderCredentials, StreamOutcome
-from app.services.vector_search_service import VectorSearchService
+from app.services.memory import MemoryProvider
 
 
 router = APIRouter(prefix="/chat")
@@ -71,38 +71,36 @@ def _as_message_response(message) -> MessageResponse:
 
 
 async def _retrieve_sources(
-    session: AsyncSession,
+    memory: MemoryProvider,
     *,
     user_id: UUID,
     query: str,
     use_rag: bool,
-) -> tuple[list[dict], list[str]]:
+) -> tuple[list[dict], list[str], dict]:
+    """Returns sources, context lines and the memory facts to store on the reply."""
     if not use_rag:
-        return [], []
-    search_results = await VectorSearchService(session).search(
-        user_id=user_id,
-        query=query,
-        limit=3,
-        offset=0,
-        min_score=0.1,
-    )
+        return [], [], {}
+    outcome = await memory.search(user_id=user_id, query=query, limit=3, offset=0, min_score=0.1)
     sources = [
         {
-            "source_id": f"{row['document_id']}:{row['chunk_index']}",
-            "document_id": row["document_id"],
-            "original_filename": row["original_filename"],
-            "chunk_index": row["chunk_index"],
+            "source_id": f"{row.document_id}:{row.chunk_index}",
+            "document_id": row.document_id,
+            "original_filename": row.original_filename,
+            "chunk_index": row.chunk_index,
             "rank": rank,
-            "score": row["score"],
-            "snippet": _snippet(row["content"]),
-            "content_hash": row.get("content_hash"),
-            "span_start": row.get("span_start"),
-            "span_end": row.get("span_end"),
+            "score": row.score,
+            "snippet": _snippet(row.content),
+            "content_hash": row.content_hash,
+            "span_start": row.span_start,
+            "span_end": row.span_end,
         }
-        for rank, row in enumerate(search_results, start=1)
+        for rank, row in enumerate(outcome.results, start=1)
     ]
     context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
-    return sources, context_lines
+    memory_meta: dict = {"memory_mode": outcome.mode}
+    if outcome.degraded_reason:
+        memory_meta["memory_degraded_reason"] = outcome.degraded_reason
+    return sources, context_lines, memory_meta
 
 
 async def _load_history(chat_repo: ChatRepository, conversation) -> list[dict[str, str]]:
@@ -120,7 +118,7 @@ async def _process_chat_turn(
     current_user: User,
     conversation,
     payload: MessageCreateRequest,
-    session: AsyncSession,
+    memory: MemoryProvider,
     credentials: ProviderCredentials | None = None,
 ) -> ChatTurnResponse:
     # Load history before saving the new message so it is not sent twice.
@@ -134,8 +132,8 @@ async def _process_chat_turn(
         metadata={"rag_used": payload.use_rag},
     )
 
-    sources, context_lines = await _retrieve_sources(
-        session,
+    sources, context_lines, memory_meta = await _retrieve_sources(
+        memory,
         user_id=current_user.id,
         query=payload.content,
         use_rag=payload.use_rag,
@@ -162,6 +160,7 @@ async def _process_chat_turn(
             **llm_metadata,
             "rag_used": payload.use_rag,
             "source_count": len(sources),
+            **memory_meta,
         },
     )
 
@@ -329,6 +328,7 @@ async def send_message(
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
     credential_service: CredentialService = Depends(get_credential_service),
+    memory: MemoryProvider = Depends(get_memory_provider),
 ) -> ChatTurnResponse:
     chat_repo = ChatRepository(session)
     conversation = await chat_repo.get_conversation_for_user(
@@ -343,7 +343,7 @@ async def send_message(
         current_user=current_user,
         conversation=conversation,
         payload=payload,
-        session=session,
+        memory=memory,
         credentials=await credential_service.resolve(current_user.id, LLMService.provider_for(conversation.model)),
     )
 
@@ -366,6 +366,7 @@ async def stream_message(
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
     credential_service: CredentialService = Depends(get_credential_service),
+    memory: MemoryProvider = Depends(get_memory_provider),
 ) -> StreamingResponse:
     chat_repo = ChatRepository(session)
     conversation = await chat_repo.get_conversation_for_user(conversation_id=conversation_id, user_id=current_user.id)
@@ -384,8 +385,8 @@ async def stream_message(
             tokens_used=_estimate_tokens(payload.content),
             metadata={"rag_used": payload.use_rag},
         )
-        sources, context_lines = await _retrieve_sources(
-            session,
+        sources, context_lines, memory_meta = await _retrieve_sources(
+            memory,
             user_id=current_user.id,
             query=payload.content,
             use_rag=payload.use_rag,
@@ -431,6 +432,7 @@ async def stream_message(
             "source_count": len(sources),
             "token_estimate": estimate,
             "total_tokens": total_tokens,
+            **memory_meta,
         }
         if outcome.input_tokens:
             assistant_metadata["input_tokens"] = outcome.input_tokens

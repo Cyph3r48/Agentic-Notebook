@@ -60,7 +60,10 @@ So that bad answers are never a silent symptom of a down vector store.
 - `.claude/plans/fix-llm-timeouts-model-ids-history.md` - error surfacing pattern (`StreamOutcome`, metadata)
 
 **Forward-references**:
-- (none yet)
+- 2026-11-21 - Found while implementing: Qdrant accepts only UUID or integer point ids, and the old code used `"<document_id>:<chunk_index>"`. A real Qdrant rejects that, so vector indexing could never have worked. Point ids are now `uuid5` of that string (stable, so re-ingest replaces). Confirmed against a real Qdrant 1.12.5 binary.
+- 2026-11-21 - Dropped `test_memory_integration.py`. The provider tests already run a real in-memory Qdrant client (local mode supports `query_points`, filtered delete and size checks), and the full path (real Postgres, real Qdrant, stand-in embedding server, real app) was run by hand instead; results are in the report.
+- 2026-11-21 - `/ready` caps the vector check at 5 seconds and reports `unknown` on timeout, so a slow embedding service cannot stall readiness probes.
+- 2026-11-21 - Existing document-service tests now stub the memory backend so they never reach Qdrant or the embedding service.
 
 ---
 

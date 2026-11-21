@@ -4,12 +4,11 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 from loguru import logger
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import db_session, get_current_user
+from app.api.deps import get_current_user, get_memory_provider
 from app.models import User
 from app.schemas.search import SearchRequest, SearchResponse, SearchResultItem
-from app.services.vector_search_service import VectorSearchService
+from app.services.memory import MemoryProvider
 
 
 router = APIRouter(prefix="/search")
@@ -19,10 +18,10 @@ router = APIRouter(prefix="/search")
 async def search_documents(
     payload: SearchRequest,
     request: Request,
-    session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
+    memory: MemoryProvider = Depends(get_memory_provider),
 ) -> SearchResponse:
-    items = await VectorSearchService(session).search(
+    outcome = await memory.search(
         user_id=current_user.id,
         query=payload.query,
         limit=payload.limit,
@@ -35,9 +34,10 @@ async def search_documents(
         action="search_documents",
         user_id=str(current_user.id),
     ).info(
-        "Search completed query_length={query_length} results={count} limit={limit} offset={offset} min_score={min_score}",
+        "Search completed query_length={query_length} results={count} mode={mode} limit={limit} offset={offset} min_score={min_score}",
         query_length=len(payload.query),
-        count=len(items),
+        count=len(outcome.results),
+        mode=outcome.mode,
         limit=payload.limit,
         offset=payload.offset,
         min_score=payload.min_score,
@@ -45,5 +45,16 @@ async def search_documents(
 
     return SearchResponse(
         query=payload.query,
-        results=[SearchResultItem(**item) for item in items],
+        results=[
+            SearchResultItem(
+                document_id=item.document_id,
+                original_filename=item.original_filename,
+                chunk_index=item.chunk_index,
+                content=item.content,
+                score=item.score,
+            )
+            for item in outcome.results
+        ],
+        mode=outcome.mode,
+        degraded_reason=outcome.degraded_reason,
     )

@@ -8,9 +8,10 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import db_session, get_credential_service, get_current_user
+from app.api.deps import db_session, get_credential_service, get_current_user, get_memory_provider
 from app.api.v1.endpoints import chat as chat_module
 from app.api.v1.endpoints.chat import router
+from conftest import FakeMemory
 
 
 class _NoCredentials:
@@ -38,12 +39,14 @@ def _empty_history(monkeypatch):
     monkeypatch.setattr(chat_module.ChatRepository, "list_recent_messages", fake_list_recent_messages)
 
 
-def _build_test_client() -> TestClient:
+def _build_test_client(memory=None) -> TestClient:
+    memory = memory if memory is not None else FakeMemory()
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = _fake_user
     app.dependency_overrides[get_credential_service] = lambda: _NoCredentials()
+    app.dependency_overrides[get_memory_provider] = lambda: memory
     return TestClient(app)
 
 
@@ -179,26 +182,17 @@ def test_send_message_endpoint(monkeypatch):
         created_rows.append(row)
         return row
 
-    async def fake_vector_search(self, *, user_id, query, limit, offset=0, min_score=0.1):
-        return [
-            {
-                "document_id": str(uuid4()),
-                "original_filename": "doc.txt",
-                "chunk_index": 0,
-                "content": "chunk",
-                "score": 0.8,
-            }
-        ]
+    memory = FakeMemory(mode="keyword_fallback", degraded_reason="Qdrant: could not connect")
+    memory.results = [memory.chunk()]
 
     async def fake_llm_reply(self, *, model, user_message, context_lines, **kwargs):
         return "assistant-response", {"provider": "ollama", "model": model}
 
     monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
     monkeypatch.setattr(chat_module.ChatRepository, "create_message", fake_create_message)
-    monkeypatch.setattr(chat_module.VectorSearchService, "search", fake_vector_search)
     monkeypatch.setattr(chat_module.LLMService, "generate_chat_reply", classmethod(fake_llm_reply))
 
-    with _build_test_client() as client:
+    with _build_test_client(memory) as client:
         response = client.post(
             f"/chat/conversations/{conversation.id}/messages",
             json={"content": "What is in my docs?", "use_rag": True},
@@ -213,6 +207,10 @@ def test_send_message_endpoint(monkeypatch):
     assert payload["assistant_message"]["sources"][0]["snippet"] == "chunk"
     assert payload["assistant_message"]["content"] == "assistant-response"
     assert payload["assistant_message"]["metadata"]["provider"] == "ollama"
+    # A degraded search is recorded on the reply so the UI can say so.
+    assert payload["assistant_message"]["metadata"]["memory_mode"] == "keyword_fallback"
+    assert payload["assistant_message"]["metadata"]["memory_degraded_reason"] == "Qdrant: could not connect"
+    assert memory.search_calls[0]["query"] == "What is in my docs?"
 
 
 def test_send_message_missing_conversation(monkeypatch):

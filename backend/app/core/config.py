@@ -4,7 +4,7 @@ Pydantic settings with environment variable support
 """
 
 import secrets
-from typing import List
+from typing import List, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     QDRANT_URL: str = Field(default="http://qdrant:6333")
     QDRANT_API_KEY: str = Field(default="")
     QDRANT_COLLECTION: str = Field(default="si_documents")
+    QDRANT_TIMEOUT_SECONDS: float = Field(default=5.0)
     EMBEDDING_DIM: int = Field(default=1024)
     
     # ============================================
@@ -42,7 +43,13 @@ class Settings(BaseSettings):
     # ============================================
     EMBEDDING_URL: str = Field(default="http://tei:80")
     EMBEDDING_MODEL: str = Field(default="BAAI/bge-large-en-v1.5")
-    VECTOR_INDEXING_ENABLED: bool = Field(default=False)
+    # The first call after a cold start can be slow while the model loads.
+    EMBEDDING_TIMEOUT_SECONDS: float = Field(default=15.0)
+    VECTOR_INDEXING_ENABLED: bool = Field(default=True)
+
+    # Where document memory lives. Only "builtin" (Postgres + Qdrant + TEI) exists today;
+    # "smc" and "http" are reserved names and fail at startup until their adapters are written.
+    MEMORY_BACKEND: Literal["builtin", "smc", "http"] = Field(default="builtin")
     
     # ============================================
     # REDIS
