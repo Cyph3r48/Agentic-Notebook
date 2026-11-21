@@ -14,6 +14,8 @@ Still not run: `docker compose up` itself (image builds, nginx, TEI, Qdrant), a 
 
 The owner deleted their local copy of the repo; the only copy is on GitHub, branch `claude/festive-hamilton-e2cy6w` (not merged into `master`, no PR opened). To work locally: clone, check out that branch, copy the env template to a local env file (git-ignored) and fill it in there. No key is ever committed; a scan of every commit on every branch found no key-shaped strings.
 
+2026-11-21 (later): planned the next ticket, `MemoryProvider` with a default-on `builtin` backend, in `.claude/plans/memory-provider-builtin.md` (fixes most of known bug 7). Assumptions are listed in the plan; nothing implemented yet. Next step: `piv-implement` on that plan.
+
 ## Done (in the code today)
 
 - FastAPI backend: auth (JWT sessions), users, documents (upload, parse, chunk, list, delete), keyword + vector search, chat conversations and messages (pagination, titles, delete), SSE streaming, citations with snippets and spans, token accounting.
