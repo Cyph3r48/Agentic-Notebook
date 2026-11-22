@@ -33,6 +33,10 @@ RUN npm ci
 # Copy source
 COPY . .
 
+# The API address is baked into the build (Vite reads it at build time)
+ARG VITE_API_BASE_URL=http://localhost:8000/api/v1
+ENV VITE_API_BASE_URL=$VITE_API_BASE_URL
+
 # Build app
 RUN npm run build
 

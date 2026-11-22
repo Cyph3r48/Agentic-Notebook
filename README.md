@@ -23,7 +23,7 @@ Earlier known problems (timeouts, Claude model IDs, API keys saved only in the b
 
 ## Quick start
 
-Requirements: Docker with Compose v2, about 8 GB RAM, 10 GB disk. For local models, [Ollama](https://ollama.com) running on the host.
+Requirements: Docker with Compose v2, about 1 GB of free RAM for the app itself (0.5 GB in lite mode, see [Memory use](#memory-use)), and a few GB of disk. For local models, [Ollama](https://ollama.com) running on the host; its models need their own memory.
 
 ```bash
 cp .env.template .env      # then edit: passwords, JWT_SECRET, admin account
@@ -52,11 +52,39 @@ Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` and change the passwor
 
 Never commit `.env`. API credits and keys belong to the provider account that issued them.
 
+### Memory use
+
+What the pieces use, measured on a Linux machine with each process running on its own (not inside containers):
+
+| Piece | Memory |
+|---|---|
+| Backend (API) | about 200 MB |
+| Postgres, idle | about 80 MB |
+| Redis | about 7 MB |
+| Qdrant, empty | about 40 MB (grows with your documents, about 1.5 KB per chunk at the default model size) |
+| Frontend as built files (nginx) | a few MB |
+| Frontend dev server (used only with the dev file) | about 240 MB |
+
+Not measured here (no Docker available): the embedding service. By model size it should be about 0.5 GB for the default small model (`BAAI/bge-small-en-v1.5`) and about 2 GB for the large one (`BAAI/bge-large-en-v1.5`). Docker Desktop on Mac and Windows reserves its own memory for the virtual machine on top of this. Ollama models are separate and depend on the model you pull.
+
+| Mode | How to start | Rough total for the app |
+|---|---|---|
+| **Lite**: keyword search only, no embedding service or vector database | `docker compose -f docker-compose.yml -f docker-compose.lite.yml up -d --build` | about 0.5 GB |
+| **Default**: small embedding model, vector search | `docker compose up -d --build` | about 1 GB |
+| **Ollama embeddings**: no embedding container, your own Ollama embeds | `docker compose up -d --build --scale tei=0`, then pick Ollama in Settings > Memory | about 0.6 GB plus the Ollama model |
+| **Larger embedding model**: better retrieval | set `EMBEDDING_MODEL=BAAI/bge-large-en-v1.5` and `EMBEDDING_DIM=1024` before starting | about 2.5 GB |
+
+These totals are estimates from the measurements above, not a measured run of the containers; the lite file and the `--scale` form are checked only by `docker compose config`, not started. Changing the embedding model later means re-indexing (Settings > Memory). You can start in lite mode and add vectors later without losing anything.
+
+The agent itself can be a small local Ollama model, a bigger Ollama model (local or Ollama Cloud), Claude or OpenAI; choose in Settings > Models.
+
+For development with live reload, add the dev file: `docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build`.
+
 ### Document memory
 
 Search works from the first start. Uploads are indexed in Postgres (keyword search) and, by default, in Qdrant with embeddings from the bundled TEI service (vector search). The first start downloads the embedding model, which can take a few minutes; until it is ready, search uses keywords only. **Settings > Memory** shows which mode you are in and why. Chat answers that fell back to keywords say so.
 
-- `VECTOR_INDEXING_ENABLED=false` turns vector search off (about 2 GB less memory).
+- `VECTOR_INDEXING_ENABLED=false` turns vector search off. For the whole low-memory setup use the lite file (see [Memory use](#memory-use)).
 - Documents are sent to whichever embedding service is active (see below). The default is the local container; the other choices are listed there with what each one sends where.
 - Documents uploaded while vectors were off, or before you changed the embedding model, are brought in with **Re-index documents** (Settings > Memory, admin only).
 - `MEMORY_BACKEND` accepts `builtin` only for now; `smc` and `http` are reserved and stop the app at startup with a clear message.
