@@ -27,3 +27,6 @@ logs/
 .claude/reports/
 .claude/code-reviews/
 .claude/settings.local.json
+
+# Redis snapshots written by local test runs
+dump.rdb
