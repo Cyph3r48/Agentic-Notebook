@@ -4,7 +4,7 @@ API v1 router registration.
 
 from fastapi import APIRouter
 
-from app.api.v1.endpoints import auth, chat, documents, memory, model_settings, provider_settings, search, system, users
+from app.api.v1.endpoints import auth, chat, documents, embedding_settings, memory, model_settings, provider_settings, search, system, users
 
 
 api_router = APIRouter()
@@ -17,3 +17,4 @@ api_router.include_router(chat.router, tags=["chat"])
 api_router.include_router(provider_settings.router, tags=["settings"])
 api_router.include_router(memory.router, tags=["memory"])
 api_router.include_router(model_settings.router, tags=["settings"])
+api_router.include_router(embedding_settings.router, tags=["settings"])

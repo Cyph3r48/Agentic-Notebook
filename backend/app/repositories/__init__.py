@@ -6,6 +6,7 @@ from app.repositories.document_repository import DocumentRepository
 from app.repositories.model_preference_repository import ModelPreferenceRepository
 from app.repositories.search_repository import SearchRepository
 from app.repositories.session_repository import SessionRepository
+from app.repositories.system_settings_repository import SystemSettingsRepository
 from app.repositories.user_repository import UserRepository
 
 __all__ = [
@@ -15,5 +16,6 @@ __all__ = [
     "ModelPreferenceRepository",
     "SearchRepository",
     "SessionRepository",
+    "SystemSettingsRepository",
     "UserRepository",
 ]

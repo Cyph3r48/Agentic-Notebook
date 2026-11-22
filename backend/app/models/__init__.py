@@ -8,6 +8,7 @@ from app.models.conversation import Conversation, Message
 from app.models.document import Document, DocumentChunk
 from app.models.provider_credential import ProviderCredential
 from app.models.session import Session
+from app.models.system_setting import SystemSetting
 from app.models.user import User
 from app.models.user_model_preference import UserModelPreference
 
@@ -23,5 +24,6 @@ __all__ = [
     "AnalyticsEvent",
     "CanonicalStore",
     "ProviderCredential",
+    "SystemSetting",
     "UserModelPreference",
 ]

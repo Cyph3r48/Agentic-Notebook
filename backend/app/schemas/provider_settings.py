@@ -12,6 +12,33 @@ ProviderName = Literal["anthropic", "openai", "ollama_cloud", "ollama"]
 PROVIDERS: tuple[str, ...] = ("anthropic", "openai", "ollama_cloud", "ollama")
 
 
+def clean_api_key(value: SecretStr | None) -> SecretStr | None:
+    """Trim and sanity-check a pasted key. The error text never contains the key."""
+    if value is None:
+        return None
+    raw = value.get_secret_value().strip()
+    if not 8 <= len(raw) <= 512:
+        raise ValueError("API key must be between 8 and 512 characters")
+    if any(ch.isspace() or ord(ch) < 32 for ch in raw):
+        raise ValueError("API key must not contain spaces or control characters")
+    return SecretStr(raw)
+
+
+def clean_base_url(value: str | None) -> str | None:
+    """A server address: http or https, with a host and no credentials. Empty means "not set"."""
+    if value is None:
+        return None
+    raw = value.strip().rstrip("/")
+    if not raw:
+        return None
+    parts = urlsplit(raw)
+    if parts.scheme not in ("http", "https") or not parts.hostname:
+        raise ValueError("Base URL must start with http:// or https:// and include a host")
+    if parts.username or parts.password:
+        raise ValueError("Base URL must not contain credentials")
+    return raw
+
+
 class ProviderSaveRequest(BaseModel):
     # SecretStr keeps the key out of repr() and accidental logging of the model.
     api_key: SecretStr | None = Field(default=None, repr=False)
@@ -20,29 +47,12 @@ class ProviderSaveRequest(BaseModel):
     @field_validator("api_key")
     @classmethod
     def check_api_key(cls, value: SecretStr | None) -> SecretStr | None:
-        if value is None:
-            return None
-        raw = value.get_secret_value().strip()
-        if not 8 <= len(raw) <= 512:
-            raise ValueError("API key must be between 8 and 512 characters")
-        if any(ch.isspace() or ord(ch) < 32 for ch in raw):
-            raise ValueError("API key must not contain spaces or control characters")
-        return SecretStr(raw)
+        return clean_api_key(value)
 
     @field_validator("base_url")
     @classmethod
     def check_base_url(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        raw = value.strip().rstrip("/")
-        if not raw:
-            return None
-        parts = urlsplit(raw)
-        if parts.scheme not in ("http", "https") or not parts.hostname:
-            raise ValueError("Base URL must start with http:// or https:// and include a host")
-        if parts.username or parts.password:
-            raise ValueError("Base URL must not contain credentials")
-        return raw
+        return clean_base_url(value)
 
 
 class ProviderStatus(BaseModel):

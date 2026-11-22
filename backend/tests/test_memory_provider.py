@@ -15,6 +15,7 @@ from app.core.config import settings
 from app.services.memory import MemoryBackendUnavailable, get_memory_provider, validate_memory_backend
 from app.services.memory import builtin
 from app.services.memory.builtin import BuiltinMemoryProvider
+from app.services.memory.embeddings import EmbeddingConfig, VectorPathError
 
 DIM = 3
 SECRET_URL = "http://user:hunter2@qdrant.internal:6333"
@@ -49,8 +50,12 @@ class _Embedder:
                 return httpx.Response(500, json={"error": "boom"})
             if request.url.path == "/health":
                 return httpx.Response(200)
-            inputs = json.loads(request.content)["inputs"]
+            body = json.loads(request.content)
+            ollama = request.url.path == "/api/embed"
+            inputs = body["input"] if ollama else body["inputs"]
             self.embed_calls.append(len(inputs))
+            if ollama:
+                return httpx.Response(200, json={"embeddings": [self._vector(text) for text in inputs]})
             if self.mode == "badshape":
                 return httpx.Response(200, json={"vectors": []})
             if self.mode == "badsize":
@@ -97,11 +102,23 @@ def world():
     return SimpleNamespace(qdrant=_SharedClient(), embedder=_Embedder(), keyword_rows=[], keyword_calls=0)
 
 
-def _provider(world, *, qdrant_factory=None) -> BuiltinMemoryProvider:
+def _config(**overrides) -> EmbeddingConfig:
+    values = dict(provider="tei", model="BAAI/bge-large-en-v1.5", base_url=settings.EMBEDDING_URL, dim=DIM)
+    values.update(overrides)
+    return EmbeddingConfig(**values)
+
+
+def _collection(**overrides) -> str:
+    """The Qdrant collection the active embedding configuration uses."""
+    return _config(**overrides).collection_name()
+
+
+def _provider(world, *, qdrant_factory=None, config=None) -> BuiltinMemoryProvider:
     provider = BuiltinMemoryProvider(
         _Session(),
         qdrant_factory=qdrant_factory or (lambda: world.qdrant),
         embed_transport=world.embedder.transport(),
+        embedding_config=config or _config(),
     )
 
     async def fake_keyword(**kwargs):
@@ -170,7 +187,7 @@ async def test_ingest_indexes_chunks_with_valid_point_ids_and_stable_payload(wor
     assert set(outcome.id_map) == {0, 1}
     for point_id in outcome.id_map.values():
         UUID(point_id)  # Qdrant accepts only UUIDs or integers as point ids
-    points, _ = await world.qdrant.client.scroll("test_docs", limit=10, with_payload=True)
+    points, _ = await world.qdrant.client.scroll(_collection(), limit=10, with_payload=True)
     payload = next(p.payload for p in points if p.payload["chunk_index"] == 1)
     assert payload == {
         "user_id": str(user_id),
@@ -192,7 +209,7 @@ async def test_point_ids_are_stable_so_reingest_replaces_rather_than_duplicates(
     for _ in range(2):
         await provider.ingest(user_id=user_id, document_id=document_id, original_filename="a.txt", chunks=_chunks("alpha"))
 
-    assert (await world.qdrant.client.count("test_docs")).count == 1
+    assert (await world.qdrant.client.count(_collection())).count == 1
 
 
 @pytest.mark.asyncio
@@ -229,7 +246,7 @@ async def test_ingest_failure_is_reported_not_raised_and_never_leaks_the_url(wor
         ("down", "Embeddings: could not connect"),
         ("http500", "Embeddings: returned HTTP 500"),
         ("badshape", "Embeddings: unexpected response format"),
-        ("badsize", f"Embeddings: model returns size 2 but EMBEDDING_DIM is {DIM}"),
+        ("badsize", f"Embeddings: model returns size 2 but the index expects size {DIM}"),
     ],
 )
 async def test_embedding_failures_have_specific_safe_messages(world, warnings_log, mode, expected):
@@ -245,14 +262,14 @@ async def test_embedding_failures_have_specific_safe_messages(world, warnings_lo
 @pytest.mark.asyncio
 async def test_ingest_refuses_a_collection_with_the_wrong_vector_size(world):
     await world.qdrant.client.create_collection(
-        "test_docs", vectors_config=qdrant.VectorParams(size=7, distance=qdrant.Distance.COSINE)
+        _collection(), vectors_config=qdrant.VectorParams(size=7, distance=qdrant.Distance.COSINE)
     )
     provider = _provider(world)
 
     outcome = await provider.ingest(user_id=uuid4(), document_id=uuid4(), original_filename="a.txt", chunks=_chunks("alpha"))
 
     assert outcome.vector_indexed is False
-    assert outcome.error == f"Qdrant: collection vectors have size 7 but EMBEDDING_DIM is {DIM}"
+    assert outcome.error == f"Qdrant: collection vectors have size 7 but the index expects size {DIM}"
 
 
 @pytest.mark.asyncio
@@ -377,7 +394,7 @@ async def test_delete_removes_only_that_document(world):
 
     await provider.delete(user_id=user_id, document_id=drop)
 
-    points, _ = await world.qdrant.client.scroll("test_docs", limit=10, with_payload=True)
+    points, _ = await world.qdrant.client.scroll(_collection(), limit=10, with_payload=True)
     assert [p.payload["document_id"] for p in points] == [str(keep)]
 
 
@@ -389,7 +406,7 @@ async def test_delete_does_not_let_another_user_remove_a_document(world):
 
     await provider.delete(user_id=uuid4(), document_id=document_id)
 
-    assert (await world.qdrant.client.count("test_docs")).count == 1
+    assert (await world.qdrant.client.count(_collection())).count == 1
 
 
 @pytest.mark.asyncio
@@ -452,7 +469,7 @@ async def test_health_down_when_both_are_down(world):
 @pytest.mark.asyncio
 async def test_health_flags_a_collection_that_does_not_match_embedding_dim(world):
     await world.qdrant.client.create_collection(
-        "test_docs", vectors_config=qdrant.VectorParams(size=9, distance=qdrant.Distance.COSINE)
+        _collection(), vectors_config=qdrant.VectorParams(size=9, distance=qdrant.Distance.COSINE)
     )
 
     health = await _provider(world).health()
@@ -468,7 +485,7 @@ async def test_health_flags_an_embedding_model_with_the_wrong_size(world):
     health = await _provider(world).health()
 
     assert health.status == "degraded"
-    assert "EMBEDDING_DIM" in health.components["embeddings"].detail
+    assert "the index expects size" in health.components["embeddings"].detail
 
 
 @pytest.mark.asyncio
@@ -497,3 +514,125 @@ def test_backends_without_an_adapter_fail_with_a_clear_message(monkeypatch, name
         validate_memory_backend()
     with pytest.raises(MemoryBackendUnavailable):
         get_memory_provider(_Session())
+
+
+# ---- the embedding model is chosen by an admin: indexes are per model ----
+
+
+@pytest.mark.asyncio
+async def test_ingest_reports_the_identity_of_the_index_it_wrote_to(world):
+    outcome = await _provider(world).ingest(
+        user_id=uuid4(), document_id=uuid4(), original_filename="a.txt", chunks=_chunks("alpha")
+    )
+
+    assert outcome.index == _config().identity()
+
+
+@pytest.mark.asyncio
+async def test_each_embedding_choice_has_its_own_index_so_a_switch_never_mixes_vectors(world):
+    user_id, document_id = uuid4(), uuid4()
+    old = _provider(world, config=_config())
+    await old.ingest(user_id=user_id, document_id=document_id, original_filename="a.txt", chunks=_chunks("alpha one"))
+    new_config = _config(provider="ollama", model="embeddinggemma", base_url="http://ollama.invalid:11434")
+
+    switched = _provider(world, config=new_config)
+    before = await switched.search(user_id=user_id, query="alpha", limit=3)
+    await switched.ingest(user_id=user_id, document_id=document_id, original_filename="a.txt", chunks=_chunks("alpha one"))
+    after = await switched.search(user_id=user_id, query="alpha", limit=3)
+
+    assert _collection() != new_config.collection_name()
+    assert before.mode == "keyword" and before.results == []  # nothing is in the new index yet
+    assert after.mode == "vector" and len(after.results) == 1
+    assert (await world.qdrant.client.count(_collection())).count == 1  # the old index is left untouched
+    assert (await world.qdrant.client.count(new_config.collection_name())).count == 1
+
+
+@pytest.mark.asyncio
+async def test_the_same_model_at_a_different_size_is_a_different_index(world):
+    assert _collection(dim=3) != _collection(dim=4)
+
+
+@pytest.mark.asyncio
+async def test_queries_and_documents_are_embedded_through_the_chosen_service(world):
+    config = _config(provider="ollama", model="embeddinggemma", base_url="http://ollama.invalid:11434")
+    provider = _provider(world, config=config)
+    user_id = uuid4()
+    await provider.ingest(user_id=user_id, document_id=uuid4(), original_filename="a.txt", chunks=_chunks("alpha one"))
+
+    outcome = await provider.search(user_id=user_id, query="alpha question", limit=3)
+
+    assert outcome.mode == "vector" and outcome.results[0].original_filename == "a.txt"
+    assert world.embedder.embed_calls == [1, 1]  # one document chunk, one query, both through /api/embed
+
+
+@pytest.mark.asyncio
+async def test_delete_removes_points_from_the_active_index_only(world):
+    user_id, document_id = uuid4(), uuid4()
+    old = _provider(world, config=_config())
+    await old.ingest(user_id=user_id, document_id=document_id, original_filename="a.txt", chunks=_chunks("alpha"))
+    new_config = _config(provider="ollama", model="embeddinggemma", base_url="http://ollama.invalid:11434")
+    switched = _provider(world, config=new_config)
+    await switched.ingest(user_id=user_id, document_id=document_id, original_filename="a.txt", chunks=_chunks("alpha"))
+
+    await switched.delete(user_id=user_id, document_id=document_id)
+
+    assert (await world.qdrant.client.count(new_config.collection_name())).count == 0
+    assert (await world.qdrant.client.count(_collection())).count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_config_that_cannot_be_loaded_falls_back_to_keywords_with_a_safe_reason(world, warnings_log):
+    provider = _provider(world)
+
+    async def broken():
+        raise VectorPathError("Embeddings: the saved key can no longer be read; enter it again in Settings")
+
+    provider._config = broken
+    world.keyword_rows = [
+        {"document_id": str(uuid4()), "original_filename": "k.txt", "chunk_index": 0, "content": "kw", "score": 0.3}
+    ]
+
+    search = await provider.search(user_id=uuid4(), query="alpha", limit=3)
+    ingest = await provider.ingest(user_id=uuid4(), document_id=uuid4(), original_filename="a.txt", chunks=_chunks("alpha"))
+
+    assert search.mode == "keyword_fallback" and "can no longer be read" in search.degraded_reason
+    assert ingest.vector_indexed is False and "can no longer be read" in ingest.error
+    health = await provider.health()
+    assert health.status == "degraded" and health.components["embeddings"].ok is False
+    assert health.components["qdrant"].ok is True
+
+
+@pytest.mark.asyncio
+async def test_health_reports_the_active_embedding_choice(world):
+    health = await _provider(world).health()
+
+    assert health.embedding == {
+        "provider": "tei", "model": "BAAI/bge-large-en-v1.5", "dim": DIM, "identity": _config().identity(),
+    }
+
+
+@pytest.mark.asyncio
+async def test_index_counts_come_from_the_document_stats_and_fail_soft(world):
+    class _Stats:
+        async def counts(self, identity):
+            return 10, 4
+
+    provider = BuiltinMemoryProvider(_Session(), embedding_config=_config(), document_stats=_Stats())
+    assert await provider.index_counts("x") == (10, 4)
+
+    class _Broken:
+        async def counts(self, identity):
+            raise RuntimeError("db gone")
+
+    broken = BuiltinMemoryProvider(_Session(), embedding_config=_config(), document_stats=_Broken())
+    assert await broken.index_counts("x") == (None, None)
+
+
+@pytest.mark.asyncio
+async def test_a_fixed_config_without_a_size_is_probed_for_it(world):
+    provider = _provider(world, config=_config(dim=None))
+
+    outcome = await provider.ingest(user_id=uuid4(), document_id=uuid4(), original_filename="a.txt", chunks=_chunks("alpha"))
+
+    assert outcome.vector_indexed is False  # the stand-in returns size 3, below the supported minimum for a real model
+    assert "outside the supported range" in outcome.error

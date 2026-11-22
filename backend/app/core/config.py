@@ -46,6 +46,11 @@ class Settings(BaseSettings):
     # The first call after a cold start can be slow while the model loads.
     EMBEDDING_TIMEOUT_SECONDS: float = Field(default=15.0)
     VECTOR_INDEXING_ENABLED: bool = Field(default=True)
+    # Which service embeds documents until an admin chooses one in Settings: the bundled TEI container (default),
+    # a local Ollama, or Ollama Cloud (its key is saved in Settings, never in the environment).
+    EMBEDDING_PROVIDER: Literal["tei", "ollama", "ollama_cloud"] = Field(default="tei")
+    # The model used when EMBEDDING_PROVIDER is ollama or ollama_cloud. TEI serves the one model in EMBEDDING_MODEL.
+    OLLAMA_EMBED_MODEL: str = Field(default="embeddinggemma")
 
     # Where document memory lives. Only "builtin" (Postgres + Qdrant + TEI) exists today;
     # "smc" and "http" are reserved names and fail at startup until their adapters are written.

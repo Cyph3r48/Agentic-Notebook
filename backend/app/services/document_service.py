@@ -154,6 +154,8 @@ class DocumentService:
             for chunk in chunks:
                 chunk["vector_id"] = indexed.id_map.get(int(chunk["chunk_index"]))
             index_metadata: dict = {"vector_indexed": indexed.vector_indexed}
+            if indexed.index:
+                index_metadata["vector_index"] = indexed.index  # which embedding model's index holds these chunks
             if indexed.error:
                 # The document still completes: keyword search works without vectors.
                 index_metadata["vector_index_error"] = indexed.error

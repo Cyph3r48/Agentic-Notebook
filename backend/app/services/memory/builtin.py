@@ -1,7 +1,11 @@
-"""Built-in memory: Postgres chunks (keyword search), Qdrant vectors, TEI embeddings.
+"""Built-in memory: Postgres chunks (keyword search), Qdrant vectors, and a chosen embedding model.
 
 Vector failures never break a request: search falls back to keywords and says so, ingest still
 completes, and every failure is logged at warning and kept for the health check.
+
+The embedding model is chosen by an admin (see `embedding_settings_service`). Each choice (provider, model and
+vector size) has its own Qdrant collection, so vectors from different models are never mixed, and a query is always
+embedded with the same configuration as the collection it searches.
 """
 
 from __future__ import annotations
@@ -17,7 +21,6 @@ import httpx
 from loguru import logger
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qdrant
-from qdrant_client.http.exceptions import ResponseHandlingException, UnexpectedResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -29,14 +32,16 @@ from app.services.memory.base import (
     MemoryHealth,
     SearchOutcome,
 )
+from app.services.memory.embeddings import (
+    EmbeddingConfig,
+    EmbeddingFormatError,
+    VectorPathError,
+    build_embedding_provider,
+    describe_error,
+)
 
-EMBED_BATCH_SIZE = 32
 # Point ids must be UUIDs or integers; this namespace makes them stable per (document, chunk).
 _POINT_NAMESPACE = uuid.UUID("6f1c3a52-0b7e-4d0e-9d57-2b1f4c8d9a10")
-
-
-class VectorPathError(Exception):
-    """A vector-path failure whose message is already safe to log, store and show."""
 
 
 @dataclass(slots=True)
@@ -67,23 +72,7 @@ def _point_id(document_id: UUID | str, chunk_index: int) -> str:
     return str(uuid.uuid5(_POINT_NAMESPACE, f"{document_id}:{chunk_index}"))
 
 
-def _describe(component: str, exc: BaseException) -> str:
-    """A fixed-vocabulary message. Never the raw text: it can carry URLs, queries or credentials."""
-    if isinstance(exc, VectorPathError):
-        return str(exc)
-    cause: BaseException = exc
-    if isinstance(exc, ResponseHandlingException) and exc.source is not None:
-        cause = exc.source
-    # Timeouts first: TimeoutError is also an OSError.
-    if isinstance(cause, (httpx.TimeoutException, TimeoutError)):
-        return f"{component}: timed out"
-    if isinstance(cause, (httpx.ConnectError, OSError)):
-        return f"{component}: could not connect"
-    if isinstance(cause, httpx.HTTPStatusError):
-        return f"{component}: returned HTTP {cause.response.status_code}"
-    if isinstance(cause, UnexpectedResponse):
-        return f"{component}: returned HTTP {cause.status_code}"
-    return f"{component}: failed ({type(cause).__name__})"
+_describe = describe_error  # kept under the old name for callers inside this package
 
 
 class BuiltinMemoryProvider:
@@ -93,11 +82,31 @@ class BuiltinMemoryProvider:
         *,
         qdrant_factory: Callable[[], AsyncQdrantClient] | None = None,
         embed_transport: httpx.AsyncBaseTransport | None = None,
+        embedding_config: EmbeddingConfig | None = None,
+        document_stats=None,
     ):
         self.session = session
         self.keyword_repo = SearchRepository(session)
         self._qdrant_factory = qdrant_factory
         self._embed_transport = embed_transport
+        # A fixed config (used by tests); otherwise the admin's choice is read from the database.
+        self._fixed_config = embedding_config
+        self._document_stats = document_stats
+
+    async def _config(self) -> EmbeddingConfig:
+        """The embedding configuration to use right now, with its vector size. Raises VectorPathError."""
+        if self._fixed_config is not None:
+            config = self._fixed_config
+            if config.dim is None:
+                config = config.with_dim((await build_embedding_provider(config, self._embed_transport).probe()).dim)
+            return config
+        from app.repositories import SystemSettingsRepository
+        from app.services.embedding_settings_service import EmbeddingSettingsService
+
+        return await EmbeddingSettingsService(SystemSettingsRepository(self.session)).active_config()
+
+    def _embedder(self, config: EmbeddingConfig):
+        return build_embedding_provider(config, self._embed_transport)
 
     # ---- public interface -------------------------------------------------
 
@@ -112,7 +121,8 @@ class BuiltinMemoryProvider:
         if not settings.VECTOR_INDEXING_ENABLED or not chunks:
             return IngestOutcome(vector_indexed="disabled")
         try:
-            embeddings = await self._embed_texts([str(chunk.get("content", "")) for chunk in chunks])
+            config = await self._config()
+            embeddings = await self._embedder(config).embed([str(chunk.get("content", "")) for chunk in chunks])
             points: list[qdrant.PointStruct] = []
             id_map: dict[int, str] = {}
             for chunk, vector in zip(chunks, embeddings, strict=True):
@@ -137,13 +147,13 @@ class BuiltinMemoryProvider:
                     )
                 )
             async with self._qdrant() as client:
-                await self._ensure_collection(client)
-                await client.upsert(collection_name=settings.QDRANT_COLLECTION, points=points, wait=True)
+                await self._ensure_collection(client, config)
+                await client.upsert(collection_name=config.collection_name(), points=points, wait=True)
         except Exception as exc:
             message = self._failure("ingest", exc)
             return IngestOutcome(vector_indexed=False, error=message)
         _record_success()
-        return IngestOutcome(id_map=id_map, vector_indexed=True)
+        return IngestOutcome(id_map=id_map, vector_indexed=True, index=config.identity())
 
     async def search(
         self,
@@ -170,14 +180,16 @@ class BuiltinMemoryProvider:
         return SearchOutcome(await self._keyword(user_id, query, limit, offset, min_score), mode="keyword")
 
     async def delete(self, *, user_id: UUID, document_id: UUID) -> None:
+        """Remove a document's points from the active index. Older indexes are left alone."""
         if not settings.VECTOR_INDEXING_ENABLED:
             return
         try:
+            collection = (await self._config()).collection_name()
             async with self._qdrant() as client:
-                if not await client.collection_exists(settings.QDRANT_COLLECTION):
+                if not await client.collection_exists(collection):
                     return
                 await client.delete(
-                    collection_name=settings.QDRANT_COLLECTION,
+                    collection_name=collection,
                     points_selector=qdrant.FilterSelector(
                         filter=qdrant.Filter(
                             must=[
@@ -203,10 +215,23 @@ class BuiltinMemoryProvider:
                 detail="Vector search is off. Search uses keywords only.",
             )
 
+        try:
+            config = await self._config()
+        except Exception as exc:
+            message = describe_error("Embeddings", exc)
+            components = {
+                "qdrant": await self._probe_qdrant(None),
+                "embeddings": ComponentHealth(False, message),
+            }
+            return self._health_from(components, None)
+
         components = {
-            "qdrant": await self._probe_qdrant(),
-            "embeddings": await self._probe_embeddings(),
+            "qdrant": await self._probe_qdrant(config),
+            "embeddings": await self._embedder(config).health(),
         }
+        return self._health_from(components, config)
+
+    def _health_from(self, components: dict[str, ComponentHealth], config: EmbeddingConfig | None) -> MemoryHealth:
         failing = [name for name, part in components.items() if not part.ok]
         if not failing:
             status, detail = "ok", "Vector and keyword search are working."
@@ -214,6 +239,9 @@ class BuiltinMemoryProvider:
             status, detail = "down", "Vector search is unavailable. Search uses keywords only."
         else:
             status, detail = "degraded", "Part of vector search is unavailable. Search uses keywords only."
+        embedding = None
+        if config is not None:
+            embedding = {"provider": config.provider, "model": config.model, "dim": config.dim, "identity": config.identity()}
         return MemoryHealth(
             status=status,
             backend="builtin",
@@ -222,13 +250,28 @@ class BuiltinMemoryProvider:
             components=components,
             last_error=_status.last_error,
             last_error_at=_status.last_error_at,
+            embedding=embedding,
         )
+
+    async def index_counts(self, identity: str) -> tuple[int | None, int | None]:
+        """(completed documents, documents already in this index). None when the database cannot be asked."""
+        try:
+            stats = self._document_stats
+            if stats is None:
+                from app.repositories import DocumentRepository
+                from app.services.embedding_settings_service import RepositoryIndexStats
+
+                stats = RepositoryIndexStats(DocumentRepository(self.session))
+            return await stats.counts(identity)
+        except Exception as exc:
+            logger.debug("Could not count indexed documents: {error}", error=type(exc).__name__)
+            return None, None
 
     # ---- internals ----------------------------------------------------------
 
     def _failure(self, action: str, exc: Exception) -> str:
-        component = "Embeddings" if _is_embedding_error(exc) else "Qdrant"
-        message = _describe(component, exc)
+        component = "Embeddings" if isinstance(exc, httpx.HTTPError) else "Qdrant"
+        message = describe_error(component, exc)
         _record_failure(message)
         logger.warning("Memory vector {action} failed: {message}", action=action, message=message)
         return message
@@ -254,12 +297,14 @@ class BuiltinMemoryProvider:
     async def _vector_search(
         self, user_id: UUID, query: str, limit: int, offset: int, min_score: float
     ) -> list[MemoryChunk]:
-        embedding = (await self._embed_texts([query]))[0]
+        config = await self._config()
+        # The query is embedded with the same configuration that names the collection it searches.
+        embedding = (await self._embedder(config).embed([query]))[0]
         async with self._qdrant() as client:
-            if not await client.collection_exists(settings.QDRANT_COLLECTION):
+            if not await client.collection_exists(config.collection_name()):
                 return []
             response = await client.query_points(
-                collection_name=settings.QDRANT_COLLECTION,
+                collection_name=config.collection_name(),
                 query=embedding,
                 limit=limit,
                 offset=offset,
@@ -303,81 +348,39 @@ class BuiltinMemoryProvider:
         finally:
             await client.close()
 
-    async def _ensure_collection(self, client: AsyncQdrantClient) -> None:
-        if not await client.collection_exists(settings.QDRANT_COLLECTION):
+    async def _ensure_collection(self, client: AsyncQdrantClient, config: EmbeddingConfig) -> None:
+        name = config.collection_name()
+        if not await client.collection_exists(name):
             await client.create_collection(
-                collection_name=settings.QDRANT_COLLECTION,
-                vectors_config=qdrant.VectorParams(size=settings.EMBEDDING_DIM, distance=qdrant.Distance.COSINE),
+                collection_name=name,
+                vectors_config=qdrant.VectorParams(size=config.dim, distance=qdrant.Distance.COSINE),
             )
             return
-        size = await self._collection_size(client)
-        if size is not None and size != settings.EMBEDDING_DIM:
-            raise VectorPathError(
-                f"Qdrant: collection vectors have size {size} but EMBEDDING_DIM is {settings.EMBEDDING_DIM}"
-            )
+        size = await self._collection_size(client, name)
+        if size is not None and size != config.dim:
+            raise VectorPathError(f"Qdrant: collection vectors have size {size} but the index expects size {config.dim}")
 
     @staticmethod
-    async def _collection_size(client: AsyncQdrantClient) -> int | None:
-        info = await client.get_collection(settings.QDRANT_COLLECTION)
+    async def _collection_size(client: AsyncQdrantClient, name: str) -> int | None:
+        info = await client.get_collection(name)
         vectors = info.config.params.vectors
         return getattr(vectors, "size", None)
 
-    async def _embed_texts(self, inputs: list[str]) -> list[list[float]]:
-        vectors: list[list[float]] = []
-        async with httpx.AsyncClient(
-            timeout=settings.EMBEDDING_TIMEOUT_SECONDS, transport=self._embed_transport
-        ) as client:
-            for start in range(0, len(inputs), EMBED_BATCH_SIZE):
-                batch = inputs[start : start + EMBED_BATCH_SIZE]
-                response = await client.post(f"{settings.EMBEDDING_URL.rstrip('/')}/embed", json={"inputs": batch})
-                response.raise_for_status()
-                payload = response.json()
-                if not (isinstance(payload, list) and payload and isinstance(payload[0], list)):
-                    raise EmbeddingFormatError("Embeddings: unexpected response format")
-                if len(payload) != len(batch):
-                    raise EmbeddingFormatError("Embeddings: wrong number of vectors returned")
-                vectors.extend([[float(x) for x in vector] for vector in payload])
-        for vector in vectors:
-            if len(vector) != settings.EMBEDDING_DIM:
-                raise EmbeddingFormatError(
-                    f"Embeddings: model returns size {len(vector)} but EMBEDDING_DIM is {settings.EMBEDDING_DIM}"
-                )
-        return vectors
-
-    async def _probe_qdrant(self) -> ComponentHealth:
+    async def _probe_qdrant(self, config: EmbeddingConfig | None) -> ComponentHealth:
         try:
             async with self._qdrant() as client:
-                if not await client.collection_exists(settings.QDRANT_COLLECTION):
-                    return ComponentHealth(True, "Reachable. The collection is created on the first upload.")
-                size = await self._collection_size(client)
-            if size is not None and size != settings.EMBEDDING_DIM:
-                return ComponentHealth(
-                    False, f"Collection vectors have size {size} but EMBEDDING_DIM is {settings.EMBEDDING_DIM}"
-                )
-            return ComponentHealth(True, "Reachable and the collection matches EMBEDDING_DIM.")
+                if config is None:
+                    await client.get_collections()
+                    return ComponentHealth(True, "Reachable.")
+                name = config.collection_name()
+                if not await client.collection_exists(name):
+                    return ComponentHealth(True, "Reachable. The index is created on the first upload.")
+                size = await self._collection_size(client, name)
+            if size is not None and size != config.dim:
+                return ComponentHealth(False, f"Collection vectors have size {size} but the index expects size {config.dim}")
+            return ComponentHealth(True, "Reachable and the index matches the embedding model.")
         except Exception as exc:
-            return ComponentHealth(False, _describe("Qdrant", exc))
-
-    async def _probe_embeddings(self) -> ComponentHealth:
-        try:
-            async with httpx.AsyncClient(
-                timeout=settings.EMBEDDING_TIMEOUT_SECONDS, transport=self._embed_transport
-            ) as client:
-                response = await client.get(f"{settings.EMBEDDING_URL.rstrip('/')}/health")
-                response.raise_for_status()
-            await self._embed_texts(["ping"])
-            return ComponentHealth(True, "Reachable and returns vectors of the expected size.")
-        except Exception as exc:
-            return ComponentHealth(False, _describe("Embeddings", exc))
+            return ComponentHealth(False, describe_error("Qdrant", exc))
 
 
-class EmbeddingFormatError(VectorPathError):
-    """The embedding service answered, but not with what we expect."""
-
-
-def _is_embedding_error(exc: BaseException) -> bool:
-    if isinstance(exc, EmbeddingFormatError):
-        return True
-    if isinstance(exc, httpx.HTTPError):
-        return True
-    return False
+__all__ = ["BuiltinMemoryProvider", "EmbeddingFormatError", "VectorPathError", "reset_status"]

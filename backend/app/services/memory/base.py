@@ -54,6 +54,8 @@ class IngestOutcome:
     # True: indexed. False: tried and failed (keyword search still works). "disabled": vectors are off.
     vector_indexed: bool | Literal["disabled"] = "disabled"
     error: str | None = None
+    # Identity of the index the chunks went into (embedding provider, model and size). None unless indexed.
+    index: str | None = None
 
 
 @dataclass(slots=True)
@@ -71,6 +73,10 @@ class MemoryHealth:
     components: dict[str, ComponentHealth] = field(default_factory=dict)
     last_error: str | None = None
     last_error_at: datetime | None = None
+    # Which embedding model is active, and how many documents are already in its index.
+    embedding: dict | None = None
+    documents_total: int | None = None
+    documents_in_index: int | None = None
 
 
 class MemoryProvider(Protocol):
