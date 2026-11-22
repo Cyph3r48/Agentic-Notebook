@@ -36,14 +36,13 @@ class Settings(BaseSettings):
     QDRANT_API_KEY: str = Field(default="")
     QDRANT_COLLECTION: str = Field(default="si_documents")
     QDRANT_TIMEOUT_SECONDS: float = Field(default=5.0)
-    EMBEDDING_DIM: int = Field(default=384)
+    EMBEDDING_DIM: int = Field(default=1024)
     
     # ============================================
     # EMBEDDINGS (TEI)
     # ============================================
     EMBEDDING_URL: str = Field(default="http://tei:80")
-    # A small model (about 130 MB of weights) so the default needs little memory. TEI serves this one model.
-    EMBEDDING_MODEL: str = Field(default="BAAI/bge-small-en-v1.5")
+    EMBEDDING_MODEL: str = Field(default="BAAI/bge-large-en-v1.5")
     # The first call after a cold start can be slow while the model loads.
     EMBEDDING_TIMEOUT_SECONDS: float = Field(default=15.0)
     VECTOR_INDEXING_ENABLED: bool = Field(default=True)

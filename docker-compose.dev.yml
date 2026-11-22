@@ -1,6 +1,6 @@
 # For developers: live reload for the backend and the frontend.
 #   docker compose -f docker-compose.yml -f docker-compose.dev.yml up -d --build
-# The default docker-compose.yml runs the small, built versions instead.
+# The default docker-compose.yml runs the built versions instead.
 services:
   backend:
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
