@@ -21,6 +21,7 @@ import httpx
 from loguru import logger
 from qdrant_client import AsyncQdrantClient
 from qdrant_client.http import models as qdrant
+from qdrant_client.http.exceptions import UnexpectedResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.config import settings
@@ -351,11 +352,17 @@ class BuiltinMemoryProvider:
     async def _ensure_collection(self, client: AsyncQdrantClient, config: EmbeddingConfig) -> None:
         name = config.collection_name()
         if not await client.collection_exists(name):
-            await client.create_collection(
-                collection_name=name,
-                vectors_config=qdrant.VectorParams(size=config.dim, distance=qdrant.Distance.COSINE),
-            )
-            return
+            try:
+                await client.create_collection(
+                    collection_name=name,
+                    vectors_config=qdrant.VectorParams(size=config.dim, distance=qdrant.Distance.COSINE),
+                )
+                return
+            except UnexpectedResponse as exc:
+                # Documents are processed concurrently: another upload created the collection between our check
+                # and our create. That is fine; use it (after the size check below).
+                if exc.status_code != 409:
+                    raise
         size = await self._collection_size(client, name)
         if size is not None and size != config.dim:
             raise VectorPathError(f"Qdrant: collection vectors have size {size} but the index expects size {config.dim}")

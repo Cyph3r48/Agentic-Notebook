@@ -22,6 +22,7 @@ import { useAllModels } from '../hooks/useChatModels'
 import { useProviderHealth } from '../hooks/useChatModels'
 import { settingsAPI } from '../api/settings'
 import { ProviderKeyFields } from '../components/ProviderKeyFields'
+import { EmbeddingSettingsCard } from '../components/EmbeddingSettingsCard'
 import { MemoryStatusCard } from '../components/MemoryStatusCard'
 import { ModelSelection } from '../components/ModelSelection'
 
@@ -537,7 +538,10 @@ export const Settings = () => {
           description="Where your documents are indexed and searched"
           icon={Database}
         >
-          <MemoryStatusCard />
+          <div className="space-y-4">
+            <MemoryStatusCard />
+            <EmbeddingSettingsCard />
+          </div>
         </SettingsSection>
 
         {/* Notifications Section */}

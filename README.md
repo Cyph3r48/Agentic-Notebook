@@ -57,9 +57,24 @@ Never commit `.env`. API credits and keys belong to the provider account that is
 Search works from the first start. Uploads are indexed in Postgres (keyword search) and, by default, in Qdrant with embeddings from the bundled TEI service (vector search). The first start downloads the embedding model, which can take a few minutes; until it is ready, search uses keywords only. **Settings > Memory** shows which mode you are in and why. Chat answers that fell back to keywords say so.
 
 - `VECTOR_INDEXING_ENABLED=false` turns vector search off (about 2 GB less memory).
-- Documents are sent to the embedding service at `EMBEDDING_URL`. The default is the local container; pointing it at an outside service sends your documents there.
-- Documents uploaded while vectors were off are not indexed retroactively yet. Re-upload them after turning vectors on.
+- Documents are sent to whichever embedding service is active (see below). The default is the local container; the other choices are listed there with what each one sends where.
+- Documents uploaded while vectors were off, or before you changed the embedding model, are brought in with **Re-index documents** (Settings > Memory, admin only).
 - `MEMORY_BACKEND` accepts `builtin` only for now; `smc` and `http` are reserved and stop the app at startup with a clear message.
+
+#### Choosing the embedding model
+
+An admin picks the embedding model in **Settings > Memory**. There is one choice for the whole system, because vectors made by different models cannot be compared.
+
+| Choice | Where document text goes | Notes |
+|---|---|---|
+| Bundled TEI (default) | Stays on your machine | One model, set by `EMBEDDING_MODEL`; the address is `EMBEDDING_URL` |
+| Ollama (local) | Your own Ollama server | Any embedding model you have pulled, for example `embeddinggemma` |
+| Ollama Cloud | Sent to ollama.com | Needs an Ollama API key, entered in Settings and stored encrypted. Whether your account offers an embedding model is something the **Test** button tells you; this has not been confirmed from outside an Ollama account |
+
+- **Test** really embeds a short string and reports the vector size. **Save** only works if that succeeds, so a model that cannot embed never becomes the active one.
+- Each choice (provider, model and vector size) gets its own Qdrant collection. After a change, documents are not in the new index until you press **Re-index documents**; until then search uses keywords for them, and Settings says how many documents are missing. The old index is kept (it uses disk) so you can switch back; delete unused collections in Qdrant yourself.
+- Re-indexing reads the text already stored in Postgres, so it costs embedding time only. It runs in the background with a progress bar, one job at a time, and stops early with an error if the embedding service keeps failing.
+- Environment variables (`EMBEDDING_PROVIDER`, `OLLAMA_EMBED_MODEL`) set the starting choice until an admin saves one. An Ollama Cloud key is never read from the environment.
 
 ### Where your API keys live
 

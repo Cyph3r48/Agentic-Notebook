@@ -69,7 +69,7 @@ Status (2026-11-22): `ollama_cloud` is its own provider (fixed `https://ollama.c
 
 ### 3.2 Settings (provider keys and model selection built, rest planned)
 
-- Choose which models each user sees and a default for new conversations (built: `GET/PUT /settings/models`, per user, `/chat/models` returns the enabled subset, `?all=true` everything). Choosing the embedding model (admin, system-wide) and the default for the decision layer are still planned.
+- Choose which models each user sees and a default for new conversations (built: `GET/PUT /settings/models`, per user, `/chat/models` returns the enabled subset, `?all=true` everything). The embedding model is an admin choice, system-wide (built, section 5); the default for the decision layer is still planned.
 - Per-provider key entry. Keys are stored server-side, Fernet-encrypted per user and bound to the owner, never returned to the browser after saving (only a four-character hint). The master key `SECRETS_ENCRYPTION_KEY` lives only in the local env file. Resolution order: the user's key, then the server-wide key if `ALLOW_SERVER_PROVIDER_KEYS`, then none. Only admins set the Ollama URL. Built: `/settings/providers`.
 - Test-connection button per provider, backed by `POST /settings/providers/{provider}/test`; `GET /chat/providers/health` is per user.
 - Privacy policy control: which providers may receive sensitive content (default: Ollama only).
@@ -125,6 +125,8 @@ health() -> MemoryHealth{status: ok|degraded|down|disabled, components, last_err
 | `builtin` (default) | Postgres chunks + Qdrant vectors + TEI embeddings. Works from `docker compose up` with no external system. |
 | `smc` | The author's Structured Memory Core. Adapter to be designed once the SMC's access method is confirmed (HTTP, MCP, or shared Postgres tables). |
 | `http` / `mcp` | Generic adapter so anyone can point the app at their own memory or RAG service. |
+
+The embedding model is an admin's system-wide choice (`GET/PUT /api/v1/settings/embedding`, `POST .../test`): TEI, a local Ollama, or Ollama Cloud (fixed `ollama.com` address, encrypted write-only key). A choice is saved only after a probe really embeds a string and measures the vector size. Each (provider, model, size) has its own Qdrant collection (`<QDRANT_COLLECTION>__<identity>`); documents record `vector_index`; `POST /api/v1/memory/reindex` (admin, one job at a time, progress in `system_settings["reindex"]`) re-embeds the stored chunks into the active index. Search never mixes models: the query is embedded with the configuration that names the collection it searches.
 
 Out-of-the-box requirements for `builtin` (built): vector indexing on by default, a real health check for Qdrant and TEI (including the embedding size), and a UI indicator when search has fallen back to keyword-only.
 

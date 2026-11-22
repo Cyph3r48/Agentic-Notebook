@@ -68,6 +68,10 @@ So that the system uses exactly the models I chose and my documents are embedded
 - 2026-11-22 - `/chat/models` returns only enabled models and `?all=true` everything; the Settings provider cards use the full list. A provider with every model on is omitted from the saved state, so models it lists later are on by default.
 - 2026-11-22 - Ollama Cloud models are validated against the live list, except when the list comes back empty (a failed listing), where the chat call reports the real error.
 - 2026-11-22 - The chat dropdown's popup was clipped by the composer card and transparent (`bg-surface-card` is undefined); fixed for the model list only.
+- 2026-11-22 - Part 2: re-index state lives in `system_settings["reindex"]` through `put_value`; a job with no progress for 5 minutes is reported `stalled` and may be taken over; a job where nothing succeeded ends `failed`; three failures in a row stop it early.
+- 2026-11-22 - Part 2: the 64 to 8192 vector-size check applies when choosing a model (probe), not to everyday health checks. A model's size is part of the index identity and is measured, never configured (TEI's `EMBEDDING_DIM` only seeds the environment default).
+- 2026-11-22 - Part 2: `vector_id` on chunks is not updated by re-indexing: point ids are deterministic (uuid5 of document and chunk), so nothing reads it.
+- 2026-11-22 - Part 2: found by the live run and fixed: concurrent first uploads raced to create the collection and the losers got HTTP 409; a 409 on create now means "use it" (after the size check).
 - 2026-11-22 - Live runs had to point the cloud address at a stand-in server by patching the module constant in the test runner; the address is deliberately not configurable in the app.
 
 ---

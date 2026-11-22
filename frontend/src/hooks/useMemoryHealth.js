@@ -7,5 +7,7 @@ export const useMemoryHealth = () => {
     queryFn: memoryAPI.getHealth,
     staleTime: 30 * 1000,
     refetchOnWindowFocus: true,
+    // While documents are being re-indexed, keep the progress fresh.
+    refetchInterval: (query) => (query.state.data?.reindex?.state === 'running' ? 3000 : false),
   })
 }

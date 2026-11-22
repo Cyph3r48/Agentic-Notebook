@@ -636,3 +636,56 @@ async def test_a_fixed_config_without_a_size_is_probed_for_it(world):
 
     assert outcome.vector_indexed is False  # the stand-in returns size 3, below the supported minimum for a real model
     assert "outside the supported range" in outcome.error
+
+
+@pytest.mark.asyncio
+async def test_two_uploads_creating_the_collection_at_once_both_get_indexed(world):
+    """The second create gets Qdrant's 409 'already exists'; that must not lose the document."""
+
+    class _RacingClient(_SharedClient):
+        async def create_collection(self, **kwargs):
+            await self.client.create_collection(**kwargs)  # the "other upload" wins the race ...
+            from qdrant_client.http.exceptions import UnexpectedResponse
+
+            raise UnexpectedResponse(409, "Conflict", b'{"status":{"error":"already exists"}}', httpx.Headers())
+
+    racing = _RacingClient()
+    provider = _provider(world, qdrant_factory=lambda: racing)
+
+    outcome = await provider.ingest(user_id=uuid4(), document_id=uuid4(), original_filename="a.txt", chunks=_chunks("alpha"))
+
+    assert outcome.vector_indexed is True
+    assert (await racing.client.count(_collection())).count == 1
+
+
+@pytest.mark.asyncio
+async def test_a_409_on_a_collection_of_the_wrong_size_is_still_refused(world):
+    class _RacingClient(_SharedClient):
+        async def create_collection(self, **kwargs):
+            await self.client.create_collection(
+                _collection(), vectors_config=qdrant.VectorParams(size=7, distance=qdrant.Distance.COSINE)
+            )
+            from qdrant_client.http.exceptions import UnexpectedResponse
+
+            raise UnexpectedResponse(409, "Conflict", b"{}", httpx.Headers())
+
+    provider = _provider(world, qdrant_factory=lambda: _RacingClient())
+
+    outcome = await provider.ingest(user_id=uuid4(), document_id=uuid4(), original_filename="a.txt", chunks=_chunks("alpha"))
+
+    assert outcome.vector_indexed is False and "have size 7" in outcome.error
+
+
+@pytest.mark.asyncio
+async def test_other_create_errors_are_still_failures(world):
+    class _BrokenClient(_SharedClient):
+        async def create_collection(self, **kwargs):
+            from qdrant_client.http.exceptions import UnexpectedResponse
+
+            raise UnexpectedResponse(500, "Server Error", b"{}", httpx.Headers())
+
+    provider = _provider(world, qdrant_factory=lambda: _BrokenClient())
+
+    outcome = await provider.ingest(user_id=uuid4(), document_id=uuid4(), original_filename="a.txt", chunks=_chunks("alpha"))
+
+    assert outcome.vector_indexed is False and outcome.error == "Qdrant: returned HTTP 500"

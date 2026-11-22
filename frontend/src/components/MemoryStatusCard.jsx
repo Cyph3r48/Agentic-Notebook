@@ -8,9 +8,15 @@ const STATUS = {
   disabled: { label: 'Off', className: 'bg-gray-400/20 text-gray-300', Icon: AlertCircle },
 }
 
-const COMPONENT_LABELS = {
-  qdrant: 'Vector store (Qdrant)',
-  embeddings: 'Embeddings (TEI)',
+const EMBEDDING_PROVIDER_LABELS = { tei: 'TEI', ollama: 'Ollama', ollama_cloud: 'Ollama Cloud' }
+
+const componentLabel = (name, embedding) => {
+  if (name === 'qdrant') return 'Vector store (Qdrant)'
+  if (name === 'embeddings') {
+    const provider = EMBEDDING_PROVIDER_LABELS[embedding?.provider]
+    return provider ? `Embeddings (${provider})` : 'Embeddings'
+  }
+  return name
 }
 
 /** Shows whether document search is using vectors or has fallen back to keywords. */
@@ -66,7 +72,7 @@ export const MemoryStatusCard = () => {
                 <XCircle className="w-4 h-4 mt-0.5 text-red-400 flex-shrink-0" />
               )}
               <div>
-                <span className="text-gray-200">{COMPONENT_LABELS[name] || name}</span>
+                <span className="text-gray-200">{componentLabel(name, data.embedding)}</span>
                 <span className="text-gray-500"> · {part.detail}</span>
               </div>
             </div>
@@ -76,7 +82,10 @@ export const MemoryStatusCard = () => {
           )}
           {data.status === 'down' || data.status === 'degraded' ? (
             <p className="text-xs text-gray-500">
-              Search still works with keywords. The first start downloads the embedding model, which can take a few minutes.
+              Search still works with keywords.
+              {data.embedding?.provider === 'tei'
+                ? ' The first start downloads the embedding model, which can take a few minutes.'
+                : ''}
             </p>
           ) : null}
         </div>

@@ -20,6 +20,7 @@ from app.repositories import (
 )
 from app.services.credential_service import CredentialService
 from app.services.embedding_settings_service import EmbeddingSettingsService, RepositoryIndexStats
+from app.services.memory.reindex import ReindexService
 from app.services.model_settings_service import ModelSettingsService
 from app.services.memory import MemoryBackendUnavailable, MemoryProvider, get_memory_provider as _select_memory
 
@@ -99,3 +100,10 @@ def require_roles(*roles: str):
         return current_user
 
     return role_dependency
+
+
+def get_reindex_service(
+    session: AsyncSession = Depends(db_session),
+    memory: MemoryProvider = Depends(get_memory_provider),
+) -> ReindexService:
+    return ReindexService(SystemSettingsRepository(session), DocumentRepository(session), memory)
