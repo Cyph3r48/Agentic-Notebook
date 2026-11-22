@@ -31,8 +31,8 @@ export const useConversations = () => {
 
   // Mutation to create a conversation
   const createMutation = useMutation({
-    mutationFn: async ({ title, model }) => {
-      return chatAPI.createConversation(title, model)
+    mutationFn: async ({ title, model, provider }) => {
+      return chatAPI.createConversation(title, model, provider)
     },
     onSuccess: () => {
       toast.success('Conversation created')

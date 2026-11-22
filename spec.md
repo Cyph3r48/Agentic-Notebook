@@ -65,9 +65,11 @@ code is the starting point for the adapters: `StreamOutcome` already carries sto
 
 Status (2026-11-21): the `LLMProvider` interface and registry live in `backend/app/services/llm/` (`base.py`, `common.py`, `registry.py`, `anthropic_provider.py`, `ollama_provider.py`, `openai_provider.py`). `LLMService` is the façade; endpoints and the credential service name no providers (a test enforces it). OpenAI uses the Responses API with streaming and always sends `store=false`; `provider_quota_exceeded` is a new normalized error for an out-of-credit account. Provider is still inferred from the model id (`claude-`, then `gpt-`/`o<digit>`/`chatgpt-` without a colon, else Ollama); a stored per-conversation provider and Ollama Cloud as its own provider are planned in `.claude/plans/model-selection-and-embeddings.md`. Cross-provider fallback and the sensitivity gate are still open.
 
-### 3.2 Settings (provider keys built, rest planned)
+Status (2026-11-22): `ollama_cloud` is its own provider (fixed `https://ollama.com` address, per-user key, no editable URL, so a key can only be sent there). Conversations store `provider` (nullable; NULL means infer from the model name, as before), so a local and a cloud model with the same name are never confused. Name-based routing remains only for rows without a provider and for callers that give none.
 
-- Choose provider and model for the agent; choose the default for the decision layer.
+### 3.2 Settings (provider keys and model selection built, rest planned)
+
+- Choose which models each user sees and a default for new conversations (built: `GET/PUT /settings/models`, per user, `/chat/models` returns the enabled subset, `?all=true` everything). Choosing the embedding model (admin, system-wide) and the default for the decision layer are still planned.
 - Per-provider key entry. Keys are stored server-side, Fernet-encrypted per user and bound to the owner, never returned to the browser after saving (only a four-character hint). The master key `SECRETS_ENCRYPTION_KEY` lives only in the local env file. Resolution order: the user's key, then the server-wide key if `ALLOW_SERVER_PROVIDER_KEYS`, then none. Only admins set the Ollama URL. Built: `/settings/providers`.
 - Test-connection button per provider, backed by `POST /settings/providers/{provider}/test`; `GET /chat/providers/health` is per user.
 - Privacy policy control: which providers may receive sensitive content (default: Ollama only).

@@ -43,7 +43,12 @@ Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` and change the passwor
 
 - **Ollama:** set `OLLAMA_URL` (default `http://host.docker.internal:11434`) and pull a model, e.g. `ollama pull llama3.2:3b-instruct-q4_K_M`.
 - **Claude:** paste your key in Settings (see below), or set a server-wide `CLAUDE_API_KEY` in `.env`. The default models are `claude-sonnet-5-5`, `claude-opus-5-5` and `claude-haiku-5-5` (hyphens, no date suffix). With a key set, the model list also comes live from the Anthropic Models API. Tune `CLAUDE_EFFORT` (`low` to `max`) for speed versus depth.
+- **Ollama Cloud:** paste your Ollama API key in Settings. It is a separate provider from the local Ollama above, because the two can list models with the same name; each conversation remembers which one it uses. The address is fixed to `ollama.com`, so your key can only ever be sent there. Prompts and document excerpts for these models are processed on Ollama's servers; read Ollama's privacy policy and cloud FAQ before sending sensitive documents.
 - **OpenAI:** paste your key in Settings (or set a server-wide `OPENAI_API_KEY`). The model list comes live from your key; `OPENAI_DEFAULT_MODEL` is the fallback if it cannot be read. Chat uses OpenAI's Responses API, and every request asks OpenAI not to store the response (`store=false`, since OpenAI's default is to keep responses for at least 30 days). The app makes no other claim about how OpenAI handles your data; read OpenAI's data controls documentation before sending sensitive documents. Sensitive-content controls (which providers may see what) are not built yet.
+
+### Choosing your models
+
+**Settings > Models** lists every model each provider returns for your keys. Tick the ones you want in your chat list and pick a default for new conversations. This is per user, and a model you switch off is hidden from the dropdown, not removed from the provider. The choices survive a provider being temporarily unreachable (they show as "not listed"). Conversations created before this feature keep working: their provider is worked out from the model name.
 
 Never commit `.env`. API credits and keys belong to the provider account that issued them.
 

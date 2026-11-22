@@ -31,3 +31,12 @@ export const useModels = () => {
     staleTime: 5 * 60 * 1000, // 5 minutes
   })
 }
+
+// Every model each provider lists for the user, including the ones switched off in Settings.
+export const useAllModels = () => {
+  return useQuery({
+    queryKey: ['models', 'all'],
+    queryFn: () => chatAPI.getModels({ all: true }),
+    staleTime: 5 * 60 * 1000,
+  })
+}

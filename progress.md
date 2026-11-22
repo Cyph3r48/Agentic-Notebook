@@ -20,6 +20,8 @@ The owner deleted their local copy of the repo; the only copy is on GitHub, bran
 
 2026-11-21 (model selection): owner wants OpenAI among the provider choices in Settings, a way to select the models in use, and embeddings served by Ollama (Cloud or local). Planned in `.claude/plans/model-selection-and-embeddings.md`: `ollama_cloud` provider, `provider` stored on conversations, per-user enabled models and default, admin-chosen embedding provider/model with a real probe, identity-named Qdrant collections and a re-index job. Unverified: whether Ollama Cloud serves embedding models (`ollama.com` blocked here). Order: LLMProvider/OpenAI plan, then Part 1, then Part 2.
 
+2026-11-22 (model selection, Part 1): implemented (plan: `.claude/plans/model-selection-and-embeddings.md`, Part 1): a `provider` stored on each conversation, Ollama Cloud as its own provider, per-user enabled models and default (`/settings/models`), a Models section in Settings and provider groups in the chat dropdown. Unit-tested and run by hand against real Postgres (migration up, down and up again on a database with existing conversations) with stand-in local and cloud Ollama servers that both list `gpt-oss:20b`. Not run: a real Ollama Cloud call (`ollama.com` is not reachable from the cloud container; needs the owner's key), Docker. Next step: owner tries Ollama Cloud with a real key, then Part 2 (embedding model selection and re-index).
+
 2026-11-21 (OpenAI): the `LLMProvider` interface, registry and OpenAI adapter are implemented (plan: `.claude/plans/llm-provider-interface-openai.md`), unit-tested and run by hand against the real `openai` 3.57.0 SDK talking to a stand-in server that speaks the Responses streaming format. Not run: a real OpenAI call (needs the owner's key), Docker, Python 3.11 (tests ran on 3.13; the image uses 3.11 and both `openai` and `httpx2` allow it). Next step: owner tries a real OpenAI chat, then `.claude/plans/model-selection-and-embeddings.md` (Part 1, then Part 2).
 
 ## Done (in the code today)
@@ -49,15 +51,16 @@ Fix these before building new features. Struck-through items are fixed in code (
 13. ~~**Model list and provider health need no login**~~ FIXED (authenticated, per user): `GET /chat/models` and `GET /chat/providers/health` have no auth dependency. They must become authenticated and per-user once keys are per-user (part of the bug 3 ticket).
 
 14. **`ALLOW_SERVER_PROVIDER_KEYS=false` does not stop Claude from using the server key**: `AnthropicProvider._api_key` falls back to `CLAUDE_API_KEY` when no credentials are passed, and the credential service passes none when the flag is off. The OpenAI adapter does not do this (covered by a test). Fixing Claude changes tests that rely on the fallback, so it was left for its own ticket.
-15. **Suspected: rate-limit responses carry no CORS headers**, so a browser shows a CORS error instead of "too many requests" (seen while running rapid tests against the dev server). Not confirmed with a header capture.
+15. **Rate-limit responses carry no CORS headers** (confirmed: a 429 has no `access-control-allow-origin`), so a browser shows a CORS error instead of "too many requests". The limit is 60 requests a minute per IP, which a busy page plus polling can reach. Fix the middleware order or add the headers to the 429.
+17. **Several popup menus use `bg-surface-card`, which is not defined** in the Tailwind config, so they are transparent (the conversation menu in `Chat.jsx` and the menu in `Documents.jsx`). The model list was fixed; these two were not.
 16. **The OpenAI SDK reads `OPENAI_BASE_URL`, `OPENAI_ORG_ID` and `OPENAI_PROJECT_ID` from the environment.** If an operator sets them in the backend container they apply to every user's key. Fine for a private deployment; do not set them on a shared one.
 
 ## Next (in order)
 
 1. [ ] Review and approve `spec.md`; answer its open questions. Approve `.claude/plans/server-side-provider-keys.md` so implementation can start.
 2. [x] Fix known bugs 1, 2, 4 (timeouts, model IDs, history) with tests. [x] Bug 3 (plus 12, 13): server-side encrypted provider keys + Settings page; awaiting owner's manual test.
-3. [x] `LLMProvider` interface + registry; Anthropic and Ollama ported; OpenAI added. [ ] Ollama Cloud as its own provider (see the model selection plan).
-4. [~] Settings page: server-side encrypted keys and Test done; provider/model picker still open.
+3. [x] `LLMProvider` interface + registry; Anthropic and Ollama ported; OpenAI and Ollama Cloud added.
+4. [x] Settings page: server-side encrypted keys, Test, and per-user model selection with a default. [ ] Admin choice of the embedding model (Part 2 of `.claude/plans/model-selection-and-embeddings.md`).
 5. [x] `MemoryProvider` interface; current Postgres/Qdrant code wrapped as `builtin`; vector path default-on with real health check and UI indicator. Left: re-index documents uploaded while vectors were off.
 6. [ ] `DecisionService` client for the Laya service that already runs on the owner's VPS (no sidecar needed; see `spec.md` 3.3 and its open questions); first decisions: retrieval gate, sensitivity gate; measure latency/accuracy on real data.
 7. [ ] Wire all five SMC layers into the chat and ingest paths with tests.
@@ -81,6 +84,8 @@ Fix these before building new features. Struck-through items are fixed in code (
 - [ ] The secrets hook matches text crudely: a command that merely mentions a blocked pattern (for example the words for a recursive-force delete) is refused. Rephrase, or tighten the regex if it gets in the way
 
 ### Validation baseline (native, no Docker daemon)
+
+- 2026-11-22, after model selection Part 1: **295 passed, 15 skipped, 4 failed** (same 4 env failures). 21 deliberate breaks of the new code, all caught. `ruff`, `npm run lint`, `npm run build` pass. Run by hand: real Postgres 16 (migration up/down/up), Redis, stand-in local and cloud Ollama servers, stand-in OpenAI server, headless Chromium. Not run: real Ollama Cloud, Docker.
 
 - 2026-11-21, after the OpenAI ticket: **246 passed, 15 skipped, 4 failed** (same 4 env failures). 21 deliberate breaks of the new code, all caught. `ruff`, `npm run lint` and `npm run build` pass. Run by hand: real Postgres 16, Redis, the real `openai` SDK against a stand-in server, headless Chromium. Not run: a real OpenAI call, Docker, Python 3.11.
 
@@ -106,3 +111,4 @@ Fix these before building new features. Struck-through items are fixed in code (
 - 2026-11-21 — Clean-clone verification (native, real Postgres/Redis, headless browser). Fixed the production frontend build and first-start migrations. Merged PR #1 into `master` after the check passed.
 - 2026-11-21 — Memory ticket: `services/memory` (interface, `builtin`, registry), `GET /memory/health`, `/ready` vector status, `vector_indexed` on documents, `memory_mode` on chat replies, Settings > Memory card and a chat chip, vectors on by default. Found that Qdrant point ids were invalid (indexing never worked); fixed. Live run: vector search and the Qdrant-down fallback both behave as designed.
 - 2026-11-21 — OpenAI ticket: moved Anthropic and Ollama behind `LLMProvider` (no behaviour change), added the OpenAI adapter (Responses API, streaming, `store=false`, per-credential breaker and model cache, quota errors), removed provider names from the endpoints and credential service, added the OpenAI card to Settings and an OpenAI group to the chat dropdown. Also fixed the Settings provider status badges, which never loaded. Found three issues (bugs 14 to 16).
+- 2026-11-22 — Model selection Part 1: conversations store their provider (migration `20261122_000004`, reversible), `ollama_cloud` provider, per-user model preferences, `/settings/models`, `/chat/models?all=true`, Settings Models section and Ollama Cloud card, provider-aware chat dropdown. Fixed the clipped and transparent model dropdown. Confirmed bug 15 (429 has no CORS headers); logged bug 17.

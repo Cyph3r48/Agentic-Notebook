@@ -18,11 +18,12 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../hooks/useAuth'
-import { useModels } from '../hooks/useChatModels'
+import { useAllModels } from '../hooks/useChatModels'
 import { useProviderHealth } from '../hooks/useChatModels'
 import { settingsAPI } from '../api/settings'
 import { ProviderKeyFields } from '../components/ProviderKeyFields'
 import { MemoryStatusCard } from '../components/MemoryStatusCard'
+import { ModelSelection } from '../components/ModelSelection'
 
 // Settings section component
 const SettingsSection = ({ title, description, icon: Icon, children }) => (
@@ -73,7 +74,7 @@ const StatusBadge = ({ status, text }) => {
 
 export const Settings = () => {
   const { user } = useAuth()
-  const { data: models, isLoading: isLoadingModels } = useModels()
+  const { data: models, isLoading: isLoadingModels } = useAllModels()
   const { data: health, isLoading: isLoadingHealth } = useProviderHealth()
   const { data: systemStatus, isLoading: isSystemLoading } = useQuery({
     queryKey: ['settings-system-status'],
@@ -421,6 +422,55 @@ export const Settings = () => {
               />
             </div>
 
+            {/* Ollama Cloud Section */}
+            <div className="p-4 rounded-lg bg-white/5">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-5 h-5 rounded bg-purple-600 flex items-center justify-center text-xs font-bold">
+                    C
+                  </div>
+                  <div>
+                    <p className="font-medium">Ollama Cloud (Optional)</p>
+                    <p className="text-sm text-gray-400">Run larger models on ollama.com with your own key</p>
+                  </div>
+                </div>
+                {isLoadingHealth ? (
+                  <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                ) : (health?.ollama_cloud?.healthy ?? health?.ollama_cloud?.ok) ? (
+                  <StatusBadge status="online" text="Connected" />
+                ) : (
+                  <StatusBadge status="warning" text="Not Configured" />
+                )}
+              </div>
+
+              <ProviderKeyFields
+                provider="ollama_cloud"
+                status={providerStatus('ollama_cloud')}
+                placeholder="Your Ollama API key"
+                helpUrl="https://ollama.com/settings/keys"
+                helpLabel="Get API key"
+                onChanged={refreshProviders}
+              />
+
+              {models?.ollama_cloud?.length > 0 && (
+                <div className="mt-3">
+                  <p className="text-sm text-gray-400 mb-2">Available models:</p>
+                  <div className="flex flex-wrap gap-2">
+                    {models.ollama_cloud.map((model) => (
+                      <span key={model.id} className="px-3 py-1 rounded-full bg-white/10 text-sm">
+                        {model.name || model.id}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <p className="mt-3 text-xs text-gray-500">
+                Your prompts and document excerpts are sent to ollama.com to be answered. Ollama&apos;s cloud FAQ
+                describes its data handling; read it before sending sensitive documents.
+              </p>
+            </div>
+
             {/* OpenAI Section */}
             <div className="p-4 rounded-lg bg-white/5">
               <div className="flex items-center justify-between mb-3">
@@ -470,6 +520,15 @@ export const Settings = () => {
               </p>
             </div>
           </div>
+        </SettingsSection>
+
+        {/* Model selection */}
+        <SettingsSection
+          title="Models"
+          description="Choose which models appear in your chat list and which one new conversations start on"
+          icon={Cpu}
+        >
+          <ModelSelection />
         </SettingsSection>
 
         {/* Document memory */}

@@ -23,6 +23,8 @@ import { toast } from 'sonner'
 import { useConversations } from '../hooks/useConversations'
 import { useMessages, messageKeys } from '../hooks/useMessages'
 import { useModels } from '../hooks/useChatModels'
+import { useModelSettings } from '../hooks/useModelSettings'
+import { MODEL_GROUPS, modelKey } from '../lib/providers'
 import { useAuthStore } from '../store/authStore'
 import { formatDistanceToNow } from '../lib/utils'
 import { streamConversationMessage } from '../lib/chatApi'
@@ -243,13 +245,7 @@ const ConversationItem = ({ conversation, isActive, onClick, onDelete, onRename 
 }
 
 // Model selector dropdown
-// One group per provider in the model list. The server decides which providers have models for this user.
-const MODEL_GROUPS = [
-  { key: 'ollama', label: 'Local Models (Ollama)', selectedClass: 'bg-blue-500/20 text-blue-400' },
-  { key: 'anthropic', label: 'Claude API', selectedClass: 'bg-orange-500/20 text-orange-400' },
-  { key: 'openai', label: 'OpenAI', selectedClass: 'bg-green-500/20 text-green-400' },
-]
-
+// `selected` is { provider, model } or null; two providers can list the same model name.
 const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
   const [isOpen, setIsOpen] = useState(false)
   const containerRef = useRef(null)
@@ -273,9 +269,9 @@ const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
     )
   }
 
-  const selectedModel =
-    MODEL_GROUPS.map((group) => models?.[group.key]?.find((m) => m.id === selected)).find(Boolean) ||
-    { name: selected }
+  const selectedKey = selected ? modelKey(selected.provider, selected.model) : null
+  const selectedEntry = selected ? models?.[selected.provider]?.find((m) => m.id === selected.model) : null
+  const selectedLabel = selectedEntry?.name || selected?.model || 'Choose a model'
 
   return (
     <div ref={containerRef} className="relative">
@@ -284,7 +280,7 @@ const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
         className="flex items-center gap-2 px-3 py-2 rounded-lg bg-white/5 hover:bg-white/10 text-sm transition-colors"
       >
         <Cpu className="w-4 h-4 text-blue-400" />
-        <span className="text-gray-300">{selectedModel.name || selected}</span>
+        <span className="text-gray-300">{selectedLabel}</span>
         <ChevronDown className={`w-4 h-4 text-gray-500 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
@@ -294,29 +290,32 @@ const ModelSelector = ({ models, selected, onSelect, isLoading }) => {
             initial={{ opacity: 0, y: -10 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: -10 }}
-            className="absolute bottom-full mb-2 left-0 w-64 max-h-96 overflow-y-auto bg-surface-card border border-white/10 rounded-lg shadow-xl z-50"
+            className="absolute bottom-full mb-2 left-0 w-64 max-h-96 overflow-y-auto bg-dark-elevated border border-white/10 rounded-lg shadow-xl z-50"
           >
             {MODEL_GROUPS.filter((group) => models[group.key]?.length > 0).map((group, index) => (
               <div key={group.key} className={`p-2 ${index > 0 ? 'border-t border-white/10' : ''}`}>
                 <p className="px-2 py-1 text-xs font-medium text-gray-500 uppercase tracking-wider">
                   {group.label}
                 </p>
-                {models[group.key].map((model) => (
-                  <button
-                    key={model.id}
-                    onClick={() => {
-                      onSelect(model.id)
-                      setIsOpen(false)
-                    }}
-                    className={`
-                      w-full px-2 py-2 rounded text-left text-sm flex items-center justify-between
-                      ${selected === model.id ? group.selectedClass : 'hover:bg-white/5'}
-                    `}
-                  >
-                    {model.name}
-                    {selected === model.id && <Check className="w-4 h-4" />}
-                  </button>
-                ))}
+                {models[group.key].map((model) => {
+                  const isSelected = selectedKey === modelKey(group.key, model.id)
+                  return (
+                    <button
+                      key={model.id}
+                      onClick={() => {
+                        onSelect({ provider: group.key, model: model.id })
+                        setIsOpen(false)
+                      }}
+                      className={`
+                        w-full px-2 py-2 rounded text-left text-sm flex items-center justify-between
+                        ${isSelected ? group.selectedClass : 'hover:bg-white/5'}
+                      `}
+                    >
+                      {model.name}
+                      {isSelected && <Check className="w-4 h-4" />}
+                    </button>
+                  )
+                })}
               </div>
             ))}
           </motion.div>
@@ -338,7 +337,9 @@ export const Chat = () => {
   const [input, setInput] = useState('')
   const [isStreaming, setIsStreaming] = useState(false)
   const [useRag, setUseRag] = useState(true)
-  const [selectedModel, setSelectedModel] = useState('llama3.2')
+  // { provider, model }: set from the conversation, else the user's saved default, else the first listed model.
+  const [selection, setSelection] = useState(null)
+  const selectedModel = selection?.model || ''
 
   // Fetch conversations and messages
   const {
@@ -356,6 +357,7 @@ export const Chat = () => {
   } = useMessages(conversationId)
 
   const { data: modelsData, isLoading: isLoadingModels } = useModels()
+  const { data: modelSettings } = useModelSettings()
 
   const addOptimisticMessageForConversation = (targetConversationId, message) => {
     queryClient.setQueryData(messageKeys.lists(targetConversationId), (old) => {
@@ -376,10 +378,22 @@ export const Chat = () => {
     if (conversationId && conversations.length > 0) {
       const conv = conversations.find(c => c.id === conversationId)
       if (conv?.model) {
-        setSelectedModel(conv.model)
+        setSelection({ provider: conv.provider, model: conv.model })
       }
     }
   }, [conversationId, conversations])
+
+  // With no conversation open, start on the saved default if it is still in the list, else the first model.
+  useEffect(() => {
+    if (conversationId || selection || !modelsData) return
+    const saved = modelSettings?.default
+    if (saved && modelsData[saved.provider]?.some((m) => m.id === saved.model)) {
+      setSelection({ provider: saved.provider, model: saved.model })
+      return
+    }
+    const group = MODEL_GROUPS.find((g) => modelsData[g.key]?.length > 0)
+    if (group) setSelection({ provider: group.key, model: modelsData[group.key][0].id })
+  }, [conversationId, selection, modelsData, modelSettings])
 
   // Scroll to bottom when messages change
   useEffect(() => {
@@ -390,7 +404,8 @@ export const Chat = () => {
   const handleNewConversation = async () => {
     const newConversation = await createConversation({
       title: 'New Conversation',
-      model: selectedModel,
+      model: selection?.model,
+      provider: selection?.provider,
     })
     navigate(`/chat/${newConversation.id}`)
   }
@@ -407,7 +422,8 @@ export const Chat = () => {
     if (!currentConversationId) {
       const newConversation = await createConversation({
         title: messageContent.slice(0, 50) || 'New Conversation',
-        model: selectedModel,
+        model: selection?.model,
+        provider: selection?.provider,
       })
       currentConversationId = newConversation.id
       navigate(`/chat/${currentConversationId}`)
@@ -565,7 +581,8 @@ export const Chat = () => {
             {/* Input area */}
             <div className="border-t border-white/10 p-4">
               <div className="max-w-4xl mx-auto">
-                <div className="glass-card p-2">
+                {/* overflow-visible: the model list opens upward, out of this card */}
+                <div className="glass-card !overflow-visible p-2">
                   <textarea
                     ref={inputRef}
                     value={input}
@@ -581,8 +598,8 @@ export const Chat = () => {
                     <div className="flex items-center gap-3">
                       <ModelSelector
                         models={modelsData}
-                        selected={selectedModel}
-                        onSelect={setSelectedModel}
+                        selected={selection}
+                        onSelect={setSelection}
                         isLoading={isLoadingModels}
                       />
 

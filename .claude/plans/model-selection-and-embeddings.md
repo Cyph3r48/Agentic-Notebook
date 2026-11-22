@@ -63,7 +63,12 @@ So that the system uses exactly the models I chose and my documents are embedded
 - `.claude/plans/server-side-provider-keys.md` - `SecretBox`, `ProviderCredentials`, `/settings/providers`
 
 **Forward-references**:
-- (none yet)
+- 2026-11-22 - Part 1 uses its own migration `20261122_000004` (provider on conversations, `user_model_preferences`). `system_settings` moves to Part 2's migration, because nothing in Part 1 needs it.
+- 2026-11-22 - Preferences live in `model_preference_repository.py` and `model_settings_service.py` (not a shared `settings_repository.py`). Adapters gained a `label` so the Settings list needs no provider names.
+- 2026-11-22 - `/chat/models` returns only enabled models and `?all=true` everything; the Settings provider cards use the full list. A provider with every model on is omitted from the saved state, so models it lists later are on by default.
+- 2026-11-22 - Ollama Cloud models are validated against the live list, except when the list comes back empty (a failed listing), where the chat call reports the real error.
+- 2026-11-22 - The chat dropdown's popup was clipped by the composer card and transparent (`bg-surface-card` is undefined); fixed for the model list only.
+- 2026-11-22 - Live runs had to point the cloud address at a stand-in server by patching the module constant in the test runner; the address is deliberately not configurable in the app.
 
 ---
 
