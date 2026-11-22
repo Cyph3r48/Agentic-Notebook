@@ -31,6 +31,7 @@ from app.services.llm.common import (
 
 class AnthropicProvider:
     id = "anthropic"
+    label = "Claude"
     always_available = False
     accepts_base_url = False
 

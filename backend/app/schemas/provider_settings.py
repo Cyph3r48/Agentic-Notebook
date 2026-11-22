@@ -8,8 +8,8 @@ from urllib.parse import urlsplit
 
 from pydantic import BaseModel, Field, SecretStr, field_validator
 
-ProviderName = Literal["anthropic", "openai", "ollama"]
-PROVIDERS: tuple[str, ...] = ("anthropic", "openai", "ollama")
+ProviderName = Literal["anthropic", "openai", "ollama_cloud", "ollama"]
+PROVIDERS: tuple[str, ...] = ("anthropic", "openai", "ollama_cloud", "ollama")
 
 
 class ProviderSaveRequest(BaseModel):

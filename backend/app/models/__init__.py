@@ -9,6 +9,7 @@ from app.models.document import Document, DocumentChunk
 from app.models.provider_credential import ProviderCredential
 from app.models.session import Session
 from app.models.user import User
+from app.models.user_model_preference import UserModelPreference
 
 __all__ = [
     "Base",
@@ -22,4 +23,5 @@ __all__ = [
     "AnalyticsEvent",
     "CanonicalStore",
     "ProviderCredential",
+    "UserModelPreference",
 ]

@@ -12,8 +12,9 @@ from app.core.database import get_db_session
 from app.core.redis_client import get_redis
 from app.core.security import decode_access_token
 from app.models import User
-from app.repositories import CredentialRepository
+from app.repositories import CredentialRepository, ModelPreferenceRepository
 from app.services.credential_service import CredentialService
+from app.services.model_settings_service import ModelSettingsService
 from app.services.memory import MemoryBackendUnavailable, MemoryProvider, get_memory_provider as _select_memory
 
 
@@ -31,6 +32,13 @@ def redis_client():
 
 def get_credential_service(session: AsyncSession = Depends(db_session)) -> CredentialService:
     return CredentialService(CredentialRepository(session))
+
+
+def get_model_settings_service(
+    session: AsyncSession = Depends(db_session),
+    credentials: CredentialService = Depends(get_credential_service),
+) -> ModelSettingsService:
+    return ModelSettingsService(ModelPreferenceRepository(session), credentials)
 
 
 def get_memory_provider(session: AsyncSession = Depends(db_session)) -> MemoryProvider:

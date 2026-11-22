@@ -3,6 +3,7 @@
 from app.repositories.chat_repository import ChatRepository
 from app.repositories.credential_repository import CredentialRepository
 from app.repositories.document_repository import DocumentRepository
+from app.repositories.model_preference_repository import ModelPreferenceRepository
 from app.repositories.search_repository import SearchRepository
 from app.repositories.session_repository import SessionRepository
 from app.repositories.user_repository import UserRepository
@@ -11,6 +12,7 @@ __all__ = [
     "ChatRepository",
     "CredentialRepository",
     "DocumentRepository",
+    "ModelPreferenceRepository",
     "SearchRepository",
     "SessionRepository",
     "UserRepository",

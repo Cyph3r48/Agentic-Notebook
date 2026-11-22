@@ -67,6 +67,8 @@ class LLMProvider(Protocol):
     """One chat provider. Adapters hold no per-request state; credentials arrive with each call."""
 
     id: str
+    # What the Settings page and the model list call it.
+    label: str
     # True when the provider works without any saved credential (a local Ollama).
     always_available: bool
     # True when an admin may point the provider at another server (a local Ollama); false for hosted APIs.

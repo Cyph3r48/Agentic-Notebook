@@ -212,3 +212,34 @@ async def test_openai_key_is_encrypted_in_storage_and_bound_to_its_owner(credent
     other = _user()
     credential_repo.rows[(other.id, "openai")] = credential_repo.rows[(user.id, "openai")]
     assert await service.resolve(other.id, "openai") is None
+
+
+@pytest.mark.asyncio
+async def test_ollama_cloud_needs_a_saved_key_and_has_no_base_url_or_server_fallback(credential_repo, master_key):
+    service, user = _service(credential_repo, master_key), _user()
+    assert await service.resolve(user.id, "ollama_cloud") is None
+    status = await service.status_for(user.id, "ollama_cloud")
+    assert (status.supported, status.configured, status.source) == (True, False, "none")
+
+    admin = SimpleNamespace(id=uuid4(), role="admin")
+    with pytest.raises(ValueError, match="Only Ollama has a base URL"):
+        await service.save(admin, "ollama_cloud", api_key=None, base_url="https://attacker.example", base_url_provided=True)
+
+    await service.save(user, "ollama_cloud", api_key=SENTINEL, base_url=None, base_url_provided=False)
+    mine = await service.resolve(user.id, "ollama_cloud")
+    assert mine.api_key == SENTINEL and mine.base_url is None and mine.source == "user"
+    assert (await service.status_for(user.id, "ollama_cloud")).source == "user"
+
+
+@pytest.mark.asyncio
+async def test_the_cloud_key_and_the_local_ollama_settings_are_separate_rows(credential_repo, master_key):
+    service = _service(credential_repo, master_key)
+    admin = SimpleNamespace(id=uuid4(), role="admin")
+    await service.save(admin, "ollama", api_key=None, base_url="http://localhost:11434", base_url_provided=True)
+    await service.save(admin, "ollama_cloud", api_key=SENTINEL, base_url=None, base_url_provided=False)
+
+    local = await service.resolve(admin.id, "ollama")
+    cloud = await service.resolve(admin.id, "ollama_cloud")
+
+    assert local.base_url == "http://localhost:11434" and local.api_key is None
+    assert cloud.api_key == SENTINEL and cloud.base_url is None

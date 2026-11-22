@@ -8,11 +8,17 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import db_session, get_credential_service, get_current_user, get_memory_provider
+from app.api.deps import (
+    db_session,
+    get_credential_service,
+    get_current_user,
+    get_memory_provider,
+    get_model_settings_service,
+)
 from app.api.v1.endpoints import chat as chat_module
 from app.api.v1.endpoints.chat import router
 from app.core.config import settings
-from conftest import FakeMemory
+from conftest import FakeMemory, NoPreferences
 
 
 class _NoCredentials:
@@ -33,6 +39,7 @@ def _client() -> TestClient:
     app.dependency_overrides[get_current_user] = lambda: SimpleNamespace(id=uuid4(), role="user")
     app.dependency_overrides[get_credential_service] = lambda: _NoCredentials()
     app.dependency_overrides[get_memory_provider] = lambda: FakeMemory()
+    app.dependency_overrides[get_model_settings_service] = lambda: NoPreferences()
     return TestClient(app)
 
 
@@ -191,7 +198,7 @@ def test_stream_failure_keeps_the_specific_error_type(monkeypatch, recorder):
 def test_create_conversation_normalizes_and_checks_claude_models(monkeypatch):
     created = {}
 
-    async def fake_create_conversation(self, *, user_id, title, model):
+    async def fake_create_conversation(self, *, user_id, title, model, provider=None):
         created["model"] = model
         return SimpleNamespace(
             id=uuid4(),

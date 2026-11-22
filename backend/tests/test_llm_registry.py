@@ -35,7 +35,7 @@ def test_models_are_routed_to_the_right_provider(model, expected):
 
 
 def test_every_provider_id_has_an_adapter_with_the_full_interface():
-    assert PROVIDER_IDS == ("anthropic", "openai", "ollama")
+    assert PROVIDER_IDS == ("anthropic", "openai", "ollama_cloud", "ollama")
     for provider_id in PROVIDER_IDS:
         adapter = get_provider(provider_id)
         assert adapter.id == provider_id
@@ -45,6 +45,7 @@ def test_every_provider_id_has_an_adapter_with_the_full_interface():
         ):
             assert callable(getattr(adapter, method)), f"{provider_id} lacks {method}"
         assert isinstance(adapter.always_available, bool) and isinstance(adapter.accepts_base_url, bool)
+        assert adapter.label
 
 
 def test_unknown_provider_has_no_adapter():

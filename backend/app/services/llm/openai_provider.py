@@ -47,6 +47,7 @@ class OpenAIStreamError(RuntimeError):
 
 class OpenAIProvider:
     id = "openai"
+    label = "OpenAI"
     always_available = False
     accepts_base_url = False
 

@@ -122,3 +122,13 @@ class FakeMemory:
 @pytest.fixture
 def fake_memory():
     return FakeMemory()
+
+
+class NoPreferences:
+    """Stands in for ModelSettingsService when a test does not care about model preferences."""
+
+    async def default_for(self, user_id):
+        return None
+
+    async def only_enabled(self, user_id, listing):
+        return listing

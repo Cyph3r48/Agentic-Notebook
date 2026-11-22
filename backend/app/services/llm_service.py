@@ -48,13 +48,30 @@ class LLMService:
 
     @staticmethod
     def provider_for(model: str) -> str:
+        """Best guess from the model name alone, for callers that were never told the provider."""
         return provider_for_model(model)
 
     @classmethod
-    async def resolve_model(cls, model: str, credentials: ProviderCredentials | None = None) -> str:
+    def provider_for_conversation(cls, conversation: Any) -> str:
+        """The provider a conversation runs on: the one stored with it, else inferred from its model name."""
+        stored = getattr(conversation, "provider", None)
+        return stored if stored and get_provider(stored) is not None else cls.provider_for(conversation.model)
+
+    @classmethod
+    def choose_provider(cls, model: str, provider: str | None = None) -> str:
+        """An explicit provider wins over the name-based guess. Raises UnsupportedModel for an unknown id."""
+        if provider is None:
+            return cls.provider_for(model)
+        if get_provider(provider) is None:
+            raise UnsupportedModel(f"Unknown provider: {provider}")
+        return provider
+
+    @classmethod
+    async def resolve_model(
+        cls, model: str, credentials: ProviderCredentials | None = None, provider: str | None = None
+    ) -> str:
         """The model id to store for a conversation. Raises UnsupportedModel with a message safe to show."""
-        provider = get_provider(cls.provider_for(model))
-        return await provider.resolve_model(model, credentials)
+        return await get_provider(cls.choose_provider(model, provider)).resolve_model(model, credentials)
 
     # ------------------------------------------------------------------
     # Prompt and history
@@ -83,9 +100,10 @@ class LLMService:
         history: list[dict[str, str]] | None = None,
         system_prompt: str | None = None,
         credentials: ProviderCredentials | None = None,
+        provider: str | None = None,
     ) -> tuple[str, dict[str, Any]]:
         started_at = time.perf_counter()
-        provider_id = cls.provider_for(model)
+        provider_id = cls.choose_provider(model, provider)
         provider = get_provider(provider_id)
         if cls._is_circuit_open(provider_id, credentials):
             logger.warning("LLM circuit open provider={provider}; using fallback response", provider=provider_id)
@@ -153,8 +171,9 @@ class LLMService:
         system_prompt: str | None = None,
         outcome: StreamOutcome | None = None,
         credentials: ProviderCredentials | None = None,
+        provider: str | None = None,
     ) -> AsyncIterator[str]:
-        provider_id = cls.provider_for(model)
+        provider_id = cls.choose_provider(model, provider)
         provider = get_provider(provider_id)
         outcome = outcome if outcome is not None else StreamOutcome()
         try:

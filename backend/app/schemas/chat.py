@@ -9,6 +9,8 @@ from pydantic import BaseModel, Field
 class ConversationCreateRequest(BaseModel):
     title: str | None = Field(default=None, max_length=500)
     model: str | None = Field(default=None, max_length=100)
+    # Which provider runs the model. Omit it and the provider is inferred from the model name.
+    provider: str | None = Field(default=None, max_length=20)
 
 
 class ConversationUpdateRequest(BaseModel):
@@ -19,6 +21,7 @@ class ConversationResponse(BaseModel):
     id: str
     title: str | None = None
     model: str
+    provider: str | None = None
     created_at: datetime
     updated_at: datetime
 

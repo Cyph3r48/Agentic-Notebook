@@ -11,9 +11,10 @@ def test_alembic_config_points_to_backend_paths():
     assert Path(cfg.get_main_option("script_location")).resolve() == (backend_root / "alembic").resolve()
 
 
-def test_single_migration_head_is_the_provider_credentials_revision():
+def test_single_migration_head_is_the_model_selection_revision():
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(migrations._alembic_config())
-    assert script.get_heads() == ["20261012_000003"]
+    assert script.get_heads() == ["20261122_000004"]
+    assert script.get_revision("20261122_000004").down_revision == "20261012_000003"
     assert script.get_revision("20261012_000003").down_revision == "20260217_000002"
