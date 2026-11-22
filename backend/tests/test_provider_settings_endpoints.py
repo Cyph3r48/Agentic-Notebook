@@ -37,14 +37,15 @@ def test_every_settings_route_and_the_chat_model_routes_need_a_login():
     assert client.get("/api/v1/chat/providers/health").status_code == 401
 
 
-def test_list_reports_all_three_providers(api):
+def test_list_reports_every_provider(api):
     client, _ = api
     body = client.get(BASE).json()
-    assert [item["provider"] for item in body] == ["anthropic", "openai", "ollama"]
+    assert [item["provider"] for item in body] == ["anthropic", "openai", "ollama_cloud", "ollama"]
     by_name = {item["provider"]: item for item in body}
     assert by_name["anthropic"]["configured"] is False and by_name["anthropic"]["source"] == "none"
     assert by_name["ollama"]["source"] == "server"
-    assert by_name["openai"]["supported"] is False
+    assert by_name["openai"]["supported"] is True and by_name["openai"]["source"] == "none"
+    assert by_name["ollama_cloud"]["supported"] is True and by_name["ollama_cloud"]["source"] == "none"
 
 
 def test_saving_a_key_returns_a_hint_and_never_the_key(api, credential_repo):

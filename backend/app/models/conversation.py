@@ -18,6 +18,9 @@ class Conversation(Base, TimestampMixin):
     user_id: Mapped[UUID] = mapped_column(PGUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True)
     title: Mapped[str | None] = mapped_column(String(500), nullable=True)
     model: Mapped[str] = mapped_column(String(100))
+    # Which provider runs `model`. NULL on conversations made before this column existed: the provider is then
+    # inferred from the model name.
+    provider: Mapped[str | None] = mapped_column(String(20), nullable=True)
     system_prompt: Mapped[str | None] = mapped_column(Text, nullable=True)
     metadata_json: Mapped[dict] = mapped_column("metadata", JSONB, default=dict)
 

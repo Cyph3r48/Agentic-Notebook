@@ -143,3 +143,33 @@ class DocumentRepository:
     async def delete_document(self, row: Document) -> None:
         await self.session.delete(row)
         await self.session.commit()
+
+    # ---- index bookkeeping (embedding model changes and re-indexing) ----
+
+    async def count_completed(self) -> int:
+        return int(await self.session.scalar(select(func.count()).select_from(Document).where(Document.status == "completed")) or 0)
+
+    async def count_in_index(self, identity: str) -> int:
+        """Completed documents whose chunks were embedded into the index with this identity."""
+        return int(
+            await self.session.scalar(
+                select(func.count())
+                .select_from(Document)
+                .where(Document.status == "completed", Document.metadata_json["vector_index"].astext == identity)
+            )
+            or 0
+        )
+
+    async def completed_ids_after(self, after: UUID | None, limit: int) -> list[UUID]:
+        query = select(Document.id).where(Document.status == "completed").order_by(Document.id).limit(limit)
+        if after is not None:
+            query = query.where(Document.id > after)
+        return list((await self.session.scalars(query)).all())
+
+    async def chunks_for_document(self, document_id: UUID) -> Sequence[DocumentChunk]:
+        return (
+            await self.session.scalars(
+                select(DocumentChunk).where(DocumentChunk.document_id == document_id).order_by(DocumentChunk.chunk_index)
+            )
+        ).all()
+

@@ -43,7 +43,8 @@ async def test_provider_credentials_round_trip_and_unique_constraint(master_key)
         session.add(ProviderCredential(user_id=user.id, provider="anthropic"))
         with pytest.raises(IntegrityError):
             await session.commit()
-        await session.rollback()
+        await session.rollback()  # expires every loaded object, so reload before touching `user` again
+        await session.refresh(user)
 
         assert await repo.delete(user_id=user.id, provider="anthropic") is True
         await session.delete(user)

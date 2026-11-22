@@ -2,10 +2,11 @@ import apiClient from './client'
 
 export const chatAPI = {
   // Create a new conversation
-  createConversation: async (title, model) => {
+  createConversation: async (title, model, provider) => {
     const response = await apiClient.post('/chat/conversations', {
       title,
       model,
+      provider,
     })
     return response.data
   },
@@ -50,9 +51,9 @@ export const chatAPI = {
     return response.data
   },
 
-  // Get available models
-  getModels: async () => {
-    const response = await apiClient.get('/chat/models')
+  // Get available models: the ones the user enabled, or every model with { all: true }
+  getModels: async (params = {}) => {
+    const response = await apiClient.get('/chat/models', { params })
     return response.data
   },
 

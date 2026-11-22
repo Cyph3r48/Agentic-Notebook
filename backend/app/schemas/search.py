@@ -1,5 +1,7 @@
 """Search API schemas."""
 
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -21,3 +23,6 @@ class SearchResultItem(BaseModel):
 class SearchResponse(BaseModel):
     query: str
     results: list[SearchResultItem]
+    # vector: answered by Qdrant. keyword: vectors off or no vector hits. keyword_fallback: vector search failed.
+    mode: Literal["vector", "keyword", "keyword_fallback"] = "keyword"
+    degraded_reason: str | None = None

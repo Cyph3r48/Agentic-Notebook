@@ -10,6 +10,9 @@ import pytest
 
 from app.core.config import settings
 from app.services import llm_service as llm_module
+from app.services.llm import ollama_provider as ollama_module
+from app.services.llm.anthropic_provider import AnthropicProvider
+from app.services.llm.ollama_provider import OllamaProvider
 from app.services.llm_service import REFUSAL_TEXT, LLMService, ProviderCredentials, StreamOutcome
 
 
@@ -17,9 +20,9 @@ from app.services.llm_service import REFUSAL_TEXT, LLMService, ProviderCredentia
 def _clean_state(monkeypatch):
     monkeypatch.setattr(LLMService, "_failure_count", {"ollama": 0, "anthropic": 0})
     monkeypatch.setattr(LLMService, "_circuit_open_until", {"ollama": None, "anthropic": None})
-    monkeypatch.setattr(LLMService, "_model_cache", {})
-    monkeypatch.setattr(LLMService, "_effort_ok", {})
-    monkeypatch.setattr(llm_module, "OLLAMA_RETRY_DELAY_SECONDS", 0)
+    monkeypatch.setattr(AnthropicProvider, "_model_cache", {})
+    monkeypatch.setattr(AnthropicProvider, "_effort_ok", {})
+    monkeypatch.setattr(ollama_module, "OLLAMA_RETRY_DELAY_SECONDS", 0)
     monkeypatch.setattr(settings, "CLAUDE_API_KEY", "")
 
 
@@ -70,18 +73,18 @@ def test_history_of_nothing_is_empty():
 
 
 def test_configured_claude_ids_have_no_dots_or_date_suffixes():
-    for entry in LLMService.configured_claude_models():
+    for entry in AnthropicProvider.configured_models():
         model_id = entry["id"]
         assert "." not in model_id
         assert not re.search(r"\d{8}", model_id)
         assert re.fullmatch(r"claude-[a-z]+(-\d+)+", model_id), model_id
-    assert settings.CLAUDE_DEFAULT_MODEL in {entry["id"] for entry in LLMService.configured_claude_models()}
+    assert settings.CLAUDE_DEFAULT_MODEL in {entry["id"] for entry in AnthropicProvider.configured_models()}
 
 
 def test_normalize_claude_model_maps_dotted_ids_only():
-    assert LLMService.normalize_claude_model("claude-sonnet-4.6") == "claude-sonnet-4-6"
-    assert LLMService.normalize_claude_model(" claude-opus-5.5 ") == "claude-opus-5-5"
-    assert LLMService.normalize_claude_model("claude-sonnet-5-5") == "claude-sonnet-5-5"
+    assert AnthropicProvider.normalize_model("claude-sonnet-4.6") == "claude-sonnet-4-6"
+    assert AnthropicProvider.normalize_model(" claude-opus-5.5 ") == "claude-opus-5-5"
+    assert AnthropicProvider.normalize_model("claude-sonnet-5-5") == "claude-sonnet-5-5"
 
 
 def _effort_caps(supported=True, **levels):
@@ -128,16 +131,16 @@ class _FakeAnthropic:
 
 
 def _use_fake_anthropic(monkeypatch, fake):
-    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(lambda cls, **kwargs: fake))
+    monkeypatch.setattr(AnthropicProvider, "_anthropic_client", classmethod(lambda cls, **kwargs: fake))
     monkeypatch.setattr(settings, "CLAUDE_API_KEY", "sk-test")
     return fake
 
 
 @pytest.mark.asyncio
 async def test_model_catalog_without_a_key_uses_configured_ids():
-    catalog = await LLMService.claude_model_catalog()
-    assert [entry["id"] for entry in catalog] == [m["id"] for m in LLMService.configured_claude_models()]
-    assert await LLMService.allowed_claude_models() == {entry["id"] for entry in catalog}
+    catalog = await AnthropicProvider.model_catalog()
+    assert [entry["id"] for entry in catalog] == [m["id"] for m in AnthropicProvider.configured_models()]
+    assert await AnthropicProvider.allowed_models() == {entry["id"] for entry in catalog}
 
 
 @pytest.mark.asyncio
@@ -145,23 +148,23 @@ async def test_model_catalog_uses_the_models_api_and_caches_it(monkeypatch):
     models = _FakeModels(["claude-sonnet-5-5", "claude-sonnet-4-6", "not-claude"])
     _use_fake_anthropic(monkeypatch, _FakeAnthropic(models=models))
 
-    first = await LLMService.claude_model_catalog()
-    second = await LLMService.claude_model_catalog()
+    first = await AnthropicProvider.model_catalog()
+    second = await AnthropicProvider.model_catalog()
 
     assert [entry["id"] for entry in first] == ["claude-sonnet-5-5", "claude-sonnet-4-6"]
     assert first[0]["name"] == "CLAUDE-SONNET-5-5"
     assert second == first
     assert models.list_calls == 1
     # Configured IDs stay allowed even when the API list omits them.
-    allowed = await LLMService.allowed_claude_models()
+    allowed = await AnthropicProvider.allowed_models()
     assert {"claude-sonnet-4-6", "claude-opus-5-5", "claude-haiku-5-5"} <= allowed
 
 
 @pytest.mark.asyncio
 async def test_model_catalog_falls_back_to_configured_ids_when_the_api_fails(monkeypatch):
     _use_fake_anthropic(monkeypatch, _FakeAnthropic(models=_FakeModels([], fail=True)))
-    catalog = await LLMService.claude_model_catalog()
-    assert [entry["id"] for entry in catalog] == [m["id"] for m in LLMService.configured_claude_models()]
+    catalog = await AnthropicProvider.model_catalog()
+    assert [entry["id"] for entry in catalog] == [m["id"] for m in AnthropicProvider.configured_models()]
 
 
 # ---------------------------------------------------------------- Ollama
@@ -176,7 +179,7 @@ def _install_ollama(monkeypatch, handler):
 
     transport = httpx.MockTransport(respond)
     monkeypatch.setattr(
-        LLMService,
+        OllamaProvider,
         "_ollama_client",
         classmethod(lambda cls, credentials=None: httpx.AsyncClient(transport=transport, timeout=cls._ollama_timeout())),
     )
@@ -191,7 +194,7 @@ def _ollama_ok(text="hello", prompt_tokens=7, completion_tokens=3):
 
 
 def test_ollama_timeout_is_not_two_seconds():
-    timeout = LLMService._ollama_timeout()
+    timeout = OllamaProvider._ollama_timeout()
     assert timeout.connect == settings.OLLAMA_CONNECT_TIMEOUT_SECONDS == 5.0
     assert timeout.read == settings.OLLAMA_READ_TIMEOUT_SECONDS == 120.0
 
@@ -556,13 +559,13 @@ def _user_creds(key=None, base_url=None, owner="u1"):
 
 def test_anthropic_client_prefers_the_users_key_over_the_server_key(monkeypatch):
     monkeypatch.setattr(settings, "CLAUDE_API_KEY", "sk-server-key-2222")
-    assert LLMService._anthropic_client(credentials=_user_creds("sk-user-key-1111")).api_key == "sk-user-key-1111"
-    assert LLMService._anthropic_client().api_key == "sk-server-key-2222"
+    assert AnthropicProvider._anthropic_client(credentials=_user_creds("sk-user-key-1111")).api_key == "sk-user-key-1111"
+    assert AnthropicProvider._anthropic_client().api_key == "sk-server-key-2222"
 
 
 def test_anthropic_client_without_any_key_fails_clearly():
     with pytest.raises(RuntimeError, match="No Claude API key"):
-        LLMService._anthropic_client()
+        AnthropicProvider._anthropic_client()
 
 
 @pytest.mark.asyncio
@@ -574,7 +577,7 @@ async def test_the_users_credentials_reach_the_client_for_the_catalog_and_the_ca
         seen.append(credentials)
         return fake
 
-    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(factory))
+    monkeypatch.setattr(AnthropicProvider, "_anthropic_client", classmethod(factory))
     credentials = _user_creds("sk-user-key-1111")
 
     await LLMService.generate_chat_reply(
@@ -591,14 +594,14 @@ async def test_each_key_gets_its_own_model_catalog(monkeypatch):
     def factory(cls, *, credentials=None, **kwargs):
         return _FakeAnthropic(models=_FakeModels(lists[credentials.api_key]))
 
-    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(factory))
+    monkeypatch.setattr(AnthropicProvider, "_anthropic_client", classmethod(factory))
     first, second = _user_creds("sk-key-aaaa-1111"), _user_creds("sk-key-bbbb-2222")
 
-    ids_a = [e["id"] for e in await LLMService.claude_model_catalog(first)]
-    ids_b = [e["id"] for e in await LLMService.claude_model_catalog(second)]
+    ids_a = [e["id"] for e in await AnthropicProvider.model_catalog(first)]
+    ids_b = [e["id"] for e in await AnthropicProvider.model_catalog(second)]
 
     assert ids_a == ["claude-sonnet-5-5"] and ids_b == ["claude-opus-5-5", "claude-haiku-5-5"]
-    assert [e["id"] for e in await LLMService.claude_model_catalog(first)] == ids_a  # still A's list from cache
+    assert [e["id"] for e in await AnthropicProvider.model_catalog(first)] == ids_a  # still A's list from cache
 
 
 @pytest.mark.asyncio
@@ -609,7 +612,7 @@ async def test_one_users_failures_do_not_open_another_users_circuit(monkeypatch)
     def factory(cls, *, credentials=None, **kwargs):
         return broken if credentials.api_key == "sk-bad-key-0000" else working
 
-    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(factory))
+    monkeypatch.setattr(AnthropicProvider, "_anthropic_client", classmethod(factory))
     bad, good = _user_creds("sk-bad-key-0000", owner="a"), _user_creds("sk-good-key-9999", owner="b")
 
     for _ in range(3):
@@ -670,16 +673,17 @@ async def test_connection_test_for_claude(monkeypatch):
     assert (await LLMService.test_connection("anthropic", _user_creds("sk-user-key-1111")))["ok"] is True
 
     bad = _FakeAnthropic(models=_awaitable_models(error=_AuthError()))
-    monkeypatch.setattr(LLMService, "_anthropic_client", classmethod(lambda cls, **kwargs: bad))
+    monkeypatch.setattr(AnthropicProvider, "_anthropic_client", classmethod(lambda cls, **kwargs: bad))
     result = await LLMService.test_connection("anthropic", _user_creds("sk-user-key-1111"))
     assert result == {"ok": False, "error_type": "provider_auth_error", "detail": "The provider rejected the key."}
     assert "sk-user-key-1111" not in str(result)
 
 
 @pytest.mark.asyncio
-async def test_connection_test_without_a_claude_key_or_for_openai():
+async def test_connection_test_without_a_key_and_for_an_unknown_provider():
     assert (await LLMService.test_connection("anthropic", None))["error_type"] == "not_configured"
-    assert (await LLMService.test_connection("openai", _user_creds("sk-openai-test-9999")))["error_type"] == "provider_not_supported"
+    assert (await LLMService.test_connection("openai", None))["error_type"] == "not_configured"
+    assert (await LLMService.test_connection("mistral", _user_creds("sk-x-test-9999")))["error_type"] == "provider_not_supported"
 
 
 @pytest.mark.asyncio

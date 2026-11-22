@@ -4,7 +4,7 @@ Pydantic settings with environment variable support
 """
 
 import secrets
-from typing import List
+from typing import List, Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     QDRANT_URL: str = Field(default="http://qdrant:6333")
     QDRANT_API_KEY: str = Field(default="")
     QDRANT_COLLECTION: str = Field(default="si_documents")
+    QDRANT_TIMEOUT_SECONDS: float = Field(default=5.0)
     EMBEDDING_DIM: int = Field(default=1024)
     
     # ============================================
@@ -42,7 +43,18 @@ class Settings(BaseSettings):
     # ============================================
     EMBEDDING_URL: str = Field(default="http://tei:80")
     EMBEDDING_MODEL: str = Field(default="BAAI/bge-large-en-v1.5")
-    VECTOR_INDEXING_ENABLED: bool = Field(default=False)
+    # The first call after a cold start can be slow while the model loads.
+    EMBEDDING_TIMEOUT_SECONDS: float = Field(default=15.0)
+    VECTOR_INDEXING_ENABLED: bool = Field(default=True)
+    # Which service embeds documents until an admin chooses one in Settings: the bundled TEI container (default),
+    # a local Ollama, or Ollama Cloud (its key is saved in Settings, never in the environment).
+    EMBEDDING_PROVIDER: Literal["tei", "ollama", "ollama_cloud"] = Field(default="tei")
+    # The model used when EMBEDDING_PROVIDER is ollama or ollama_cloud. TEI serves the one model in EMBEDDING_MODEL.
+    OLLAMA_EMBED_MODEL: str = Field(default="embeddinggemma")
+
+    # Where document memory lives. Only "builtin" (Postgres + Qdrant + TEI) exists today;
+    # "smc" and "http" are reserved names and fail at startup until their adapters are written.
+    MEMORY_BACKEND: Literal["builtin", "smc", "http"] = Field(default="builtin")
     
     # ============================================
     # REDIS
@@ -70,6 +82,24 @@ class Settings(BaseSettings):
     CLAUDE_EFFORT: str = Field(default="medium")
     CLAUDE_MAX_OUTPUT_TOKENS: int = Field(default=16000)
     ANTHROPIC_REQUEST_TIMEOUT_SECONDS: float = Field(default=600.0)
+
+    # OpenAI (Optional). Users normally save their own key in Settings; this is the server-wide fallback.
+    OPENAI_API_KEY: str = Field(default="")
+    # Used when the live model list cannot be read. The live list from the user's own key is what they pick from.
+    OPENAI_DEFAULT_MODEL: str = Field(default="gpt-5.5")
+    OPENAI_MAX_OUTPUT_TOKENS: int = Field(default=16000)
+    OPENAI_REQUEST_TIMEOUT_SECONDS: float = Field(default=600.0)
+    # Empty means "send nothing": which effort levels a model accepts differs by model.
+    OPENAI_REASONING_EFFORT: str = Field(default="")
+
+    @field_validator("OPENAI_REASONING_EFFORT")
+    @classmethod
+    def validate_openai_reasoning_effort(cls, v: str) -> str:
+        allowed = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+        value = v.strip().lower()
+        if value and value not in allowed:
+            raise ValueError(f"OPENAI_REASONING_EFFORT must be empty or one of {sorted(allowed)}")
+        return value
 
     # Chat history sent with each turn, and how long the live model list is cached.
     LLM_HISTORY_MESSAGES: int = Field(default=12)

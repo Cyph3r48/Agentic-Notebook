@@ -47,7 +47,7 @@ React (Vite) ── nginx ── FastAPI backend ──┬── ProviderRegistr
 
 Existing and working today: FastAPI, Postgres + Alembic migrations, Redis, JWT auth, document ingestion and chunking, chat + SSE streaming, citations, React UI, Docker Compose, backend CI.
 
-### 3.1 Provider layer (planned)
+### 3.1 Provider layer (built for Anthropic, OpenAI and Ollama)
 
 Replace the `startswith("claude-")` routing in `backend/app/services/llm_service.py` with a `LLMProvider` interface and a registry:
 
@@ -61,11 +61,15 @@ Replace the `startswith("claude-")` routing in `backend/app/services/llm_service
 Status (2026-10-08): the history, timeout, model-ID and Anthropic-SDK parts are done inside `LLMService` (see `progress.md`). That
 code is the starting point for the adapters: `StreamOutcome` already carries stop reason, real token usage and normalized
 `error_type` values (`provider_timeout`, `provider_auth_error`, `provider_rate_limited`, `provider_http_error`, `provider_refusal`,
-`provider_error`). The `LLMProvider` interface, the registry, OpenAI and Ollama cloud are still open.
+`provider_error`).
 
-### 3.2 Settings (provider keys built, rest planned)
+Status (2026-11-21): the `LLMProvider` interface and registry live in `backend/app/services/llm/` (`base.py`, `common.py`, `registry.py`, `anthropic_provider.py`, `ollama_provider.py`, `openai_provider.py`). `LLMService` is the façade; endpoints and the credential service name no providers (a test enforces it). OpenAI uses the Responses API with streaming and always sends `store=false`; `provider_quota_exceeded` is a new normalized error for an out-of-credit account. Provider is still inferred from the model id (`claude-`, then `gpt-`/`o<digit>`/`chatgpt-` without a colon, else Ollama); a stored per-conversation provider and Ollama Cloud as its own provider are planned in `.claude/plans/model-selection-and-embeddings.md`. Cross-provider fallback and the sensitivity gate are still open.
 
-- Choose provider and model for the agent; choose the default for the decision layer.
+Status (2026-11-22): `ollama_cloud` is its own provider (fixed `https://ollama.com` address, per-user key, no editable URL, so a key can only be sent there). Conversations store `provider` (nullable; NULL means infer from the model name, as before), so a local and a cloud model with the same name are never confused. Name-based routing remains only for rows without a provider and for callers that give none.
+
+### 3.2 Settings (provider keys and model selection built, rest planned)
+
+- Choose which models each user sees and a default for new conversations (built: `GET/PUT /settings/models`, per user, `/chat/models` returns the enabled subset, `?all=true` everything). The embedding model is an admin choice, system-wide (built, section 5); the default for the decision layer is still planned.
 - Per-provider key entry. Keys are stored server-side, Fernet-encrypted per user and bound to the owner, never returned to the browser after saving (only a four-character hint). The master key `SECRETS_ENCRYPTION_KEY` lives only in the local env file. Resolution order: the user's key, then the server-wide key if `ALLOW_SERVER_PROVIDER_KEYS`, then none. Only admins set the Ollama URL. Built: `/settings/providers`.
 - Test-connection button per provider, backed by `POST /settings/providers/{provider}/test`; `GET /chat/providers/health` is per user.
 - Privacy policy control: which providers may receive sensitive content (default: Ollama only).
@@ -108,12 +112,13 @@ v1 requirement: all five layers are on the request path, covered by tests, and P
 The agent depends only on a `MemoryProvider` interface. Selected with `MEMORY_BACKEND=builtin|smc|http`.
 
 ```
-ingest(user_id, document) -> document_id
-search(user_id, query, limit, filters) -> [Chunk{document_id, chunk_index, content, score, source, content_hash, span}]
-get(user_id, document_id) -> Document
+ingest(user_id, document_id, original_filename, chunks) -> IngestOutcome{id_map, vector_indexed, error}
+search(user_id, query, limit, offset, min_score) -> SearchOutcome{results: [MemoryChunk], mode, degraded_reason}
 delete(user_id, document_id)
-health() -> {status, detail}
+health() -> MemoryHealth{status: ok|degraded|down|disabled, components, last_error}
 ```
+
+`mode` is `vector`, `keyword` (vectors off, or no vector hits) or `keyword_fallback` (the vector path failed; the reason is logged at warning, kept for health, and stored on the chat reply). A failed vector index never fails an upload; the document records `vector_indexed`. `get` was dropped: documents live in Postgres and nothing needs a provider-level read yet. Code: `backend/app/services/memory/`; status at `GET /api/v1/memory/health`.
 
 | Backend | Description |
 |---|---|
@@ -121,7 +126,9 @@ health() -> {status, detail}
 | `smc` | The author's Structured Memory Core. Adapter to be designed once the SMC's access method is confirmed (HTTP, MCP, or shared Postgres tables). |
 | `http` / `mcp` | Generic adapter so anyone can point the app at their own memory or RAG service. |
 
-Out-of-the-box requirements for `builtin` (planned fixes in `progress.md`): vector indexing on by default, a real health check for Qdrant and TEI, and a UI indicator when search has fallen back to keyword-only.
+The embedding model is an admin's system-wide choice (`GET/PUT /api/v1/settings/embedding`, `POST .../test`): TEI, a local Ollama, or Ollama Cloud (fixed `ollama.com` address, encrypted write-only key). A choice is saved only after a probe really embeds a string and measures the vector size. Each (provider, model, size) has its own Qdrant collection (`<QDRANT_COLLECTION>__<identity>`); documents record `vector_index`; `POST /api/v1/memory/reindex` (admin, one job at a time, progress in `system_settings["reindex"]`) re-embeds the stored chunks into the active index. Search never mixes models: the query is embedded with the configuration that names the collection it searches.
+
+Out-of-the-box requirements for `builtin` (built): vector indexing on by default, a real health check for Qdrant and TEI (including the embedding size), and a UI indicator when search has fallen back to keyword-only.
 
 ## 6. Quality bar
 

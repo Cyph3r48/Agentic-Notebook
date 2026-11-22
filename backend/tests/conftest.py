@@ -78,3 +78,57 @@ def _no_server_claude_key(monkeypatch):
     """Tests start with no server-wide Claude key and the fallback allowed; they opt in to anything else."""
     monkeypatch.setattr(settings, "CLAUDE_API_KEY", "")
     monkeypatch.setattr(settings, "ALLOW_SERVER_PROVIDER_KEYS", True)
+
+
+class FakeMemory:
+    """Stands in for a MemoryProvider. Records calls and returns what the test set."""
+
+    def __init__(self, results=None, mode="keyword", degraded_reason=None):
+        from app.services.memory import MemoryChunk
+
+        self._chunk = MemoryChunk
+        self.results = list(results or [])
+        self.mode = mode
+        self.degraded_reason = degraded_reason
+        self.search_calls: list[dict] = []
+
+    def chunk(self, **overrides):
+        values = {
+            "document_id": "00000000-0000-0000-0000-000000000001",
+            "original_filename": "doc.txt",
+            "chunk_index": 0,
+            "content": "chunk",
+            "score": 0.8,
+        }
+        values.update(overrides)
+        return self._chunk(**values)
+
+    async def search(self, **kwargs):
+        from app.services.memory import SearchOutcome
+
+        self.search_calls.append(kwargs)
+        return SearchOutcome(self.results, mode=self.mode, degraded_reason=self.degraded_reason)
+
+    async def ingest(self, **kwargs):
+        raise AssertionError("not expected in this test")
+
+    async def delete(self, **kwargs):
+        raise AssertionError("not expected in this test")
+
+    async def health(self):
+        raise AssertionError("not expected in this test")
+
+
+@pytest.fixture
+def fake_memory():
+    return FakeMemory()
+
+
+class NoPreferences:
+    """Stands in for ModelSettingsService when a test does not care about model preferences."""
+
+    async def default_for(self, user_id):
+        return None
+
+    async def only_enabled(self, user_id, listing):
+        return listing

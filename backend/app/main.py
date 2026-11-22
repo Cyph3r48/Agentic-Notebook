@@ -3,6 +3,7 @@ Structured Intelligence - Main Application
 Production-grade NotebookLM alternative with SMC integration
 """
 
+import asyncio
 from http import HTTPStatus
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -16,7 +17,7 @@ from loguru import logger
 
 from app.core.config import settings
 from app.core.bootstrap import ensure_admin_user
-from app.core.database import init_db, close_db, is_db_healthy
+from app.core.database import SessionLocal, init_db, close_db, is_db_healthy
 from app.core.errors import AppError, error_payload
 from app.core.migrations import run_startup_migrations
 from app.core.redis_client import init_redis, close_redis, is_redis_healthy
@@ -24,12 +25,16 @@ from app.api.v1 import api_router
 from app.middleware.rate_limit import RateLimitMiddleware
 from app.middleware.request_id import RequestIDMiddleware
 from app.middleware.security import SecurityHeadersMiddleware
+from app.services.memory import get_memory_provider, validate_memory_backend
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Startup and shutdown events"""
     logger.info("🚀 Starting Structured Intelligence...")
+
+    # Fail early and clearly when MEMORY_BACKEND names an adapter that does not exist yet.
+    validate_memory_backend()
 
     if settings.AUTO_RUN_MIGRATIONS:
         if settings.ENVIRONMENT.lower() == "production" and not settings.FORCE_RUN_MIGRATIONS_IN_PRODUCTION:
@@ -129,6 +134,16 @@ async def health_check():
         "version": "1.0.0"
     }
 
+async def _vector_status() -> str:
+    """Vector search state for /ready. Informational: keyword search keeps the app usable without it."""
+    try:
+        async with SessionLocal() as session:
+            report = await asyncio.wait_for(get_memory_provider(session).health(), timeout=5.0)
+        return report.status
+    except Exception:
+        return "unknown"
+
+
 # Readiness check
 @app.get("/ready", tags=["health"])
 async def readiness_check():
@@ -141,7 +156,7 @@ async def readiness_check():
         "status": "ready" if ready else "degraded",
         "database": "connected" if db_ok else "unavailable",
         "redis": "connected" if redis_ok else "unavailable",
-        "vector_db": "unknown"
+        "vector_db": await _vector_status(),
     }
     status_code = status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE
     return JSONResponse(status_code=status_code, content=response)

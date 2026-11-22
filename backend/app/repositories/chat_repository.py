@@ -21,11 +21,13 @@ class ChatRepository:
         user_id: UUID,
         title: str | None,
         model: str,
+        provider: str | None = None,
     ) -> Conversation:
         row = Conversation(
             user_id=user_id,
             title=title,
             model=model,
+            provider=provider,
             metadata_json={},
         )
         self.session.add(row)

@@ -8,9 +8,20 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.api.deps import db_session, get_credential_service, get_current_user
+from app.api.deps import (
+    db_session,
+    get_credential_service,
+    get_current_user,
+    get_memory_provider,
+    get_model_settings_service,
+)
 from app.api.v1.endpoints import chat as chat_module
 from app.api.v1.endpoints.chat import router
+from app.services.llm.anthropic_provider import AnthropicProvider
+from app.services.llm.ollama_provider import OllamaProvider
+from app.services.llm.openai_provider import OpenAIProvider
+from app.services.llm_service import ProviderCredentials
+from conftest import FakeMemory, NoPreferences
 
 
 class _NoCredentials:
@@ -38,12 +49,15 @@ def _empty_history(monkeypatch):
     monkeypatch.setattr(chat_module.ChatRepository, "list_recent_messages", fake_list_recent_messages)
 
 
-def _build_test_client() -> TestClient:
+def _build_test_client(memory=None, credentials=None, model_settings=None) -> TestClient:
+    memory = memory if memory is not None else FakeMemory()
     app = FastAPI()
     app.include_router(router)
     app.dependency_overrides[db_session] = _fake_db_session
     app.dependency_overrides[get_current_user] = _fake_user
-    app.dependency_overrides[get_credential_service] = lambda: _NoCredentials()
+    app.dependency_overrides[get_credential_service] = lambda: credentials or _NoCredentials()
+    app.dependency_overrides[get_memory_provider] = lambda: memory
+    app.dependency_overrides[get_model_settings_service] = lambda: model_settings or NoPreferences()
     return TestClient(app)
 
 
@@ -56,7 +70,7 @@ def test_create_conversation_endpoint(monkeypatch):
         updated_at=datetime.now(tz=timezone.utc),
     )
 
-    async def fake_create_conversation(self, *, user_id, title, model):
+    async def fake_create_conversation(self, *, user_id, title, model, provider=None):
         return fake_row
 
     monkeypatch.setattr(chat_module.ChatRepository, "create_conversation", fake_create_conversation)
@@ -179,26 +193,17 @@ def test_send_message_endpoint(monkeypatch):
         created_rows.append(row)
         return row
 
-    async def fake_vector_search(self, *, user_id, query, limit, offset=0, min_score=0.1):
-        return [
-            {
-                "document_id": str(uuid4()),
-                "original_filename": "doc.txt",
-                "chunk_index": 0,
-                "content": "chunk",
-                "score": 0.8,
-            }
-        ]
+    memory = FakeMemory(mode="keyword_fallback", degraded_reason="Qdrant: could not connect")
+    memory.results = [memory.chunk()]
 
     async def fake_llm_reply(self, *, model, user_message, context_lines, **kwargs):
         return "assistant-response", {"provider": "ollama", "model": model}
 
     monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get_conversation_for_user)
     monkeypatch.setattr(chat_module.ChatRepository, "create_message", fake_create_message)
-    monkeypatch.setattr(chat_module.VectorSearchService, "search", fake_vector_search)
     monkeypatch.setattr(chat_module.LLMService, "generate_chat_reply", classmethod(fake_llm_reply))
 
-    with _build_test_client() as client:
+    with _build_test_client(memory) as client:
         response = client.post(
             f"/chat/conversations/{conversation.id}/messages",
             json={"content": "What is in my docs?", "use_rag": True},
@@ -213,6 +218,10 @@ def test_send_message_endpoint(monkeypatch):
     assert payload["assistant_message"]["sources"][0]["snippet"] == "chunk"
     assert payload["assistant_message"]["content"] == "assistant-response"
     assert payload["assistant_message"]["metadata"]["provider"] == "ollama"
+    # A degraded search is recorded on the reply so the UI can say so.
+    assert payload["assistant_message"]["metadata"]["memory_mode"] == "keyword_fallback"
+    assert payload["assistant_message"]["metadata"]["memory_degraded_reason"] == "Qdrant: could not connect"
+    assert memory.search_calls[0]["query"] == "What is in my docs?"
 
 
 def test_send_message_missing_conversation(monkeypatch):
@@ -475,7 +484,7 @@ def test_list_messages_endpoint_with_filters(monkeypatch):
 
 
 def test_models_endpoint(monkeypatch):
-    async def fake_list_models(cls, **kwargs):
+    async def fake_list_models(cls, *args, **kwargs):
         return {
             "ollama": [{"id": "llama3.2:3b-instruct-q4_K_M", "provider": "ollama"}],
             "anthropic": [{"id": "claude-sonnet-4-6", "provider": "anthropic"}],
@@ -494,7 +503,7 @@ def test_models_endpoint(monkeypatch):
 
 
 def test_provider_health_endpoint(monkeypatch):
-    async def fake_provider_health(cls, **kwargs):
+    async def fake_provider_health(cls, *args, **kwargs):
         return {
             "ollama": {"healthy": True, "circuit_open": False},
             "anthropic": {"healthy": False, "circuit_open": True},
@@ -535,3 +544,276 @@ def test_update_conversation_endpoint(monkeypatch):
     assert response.status_code == 200
     payload = response.json()
     assert payload["title"] == "Renamed"
+
+
+class _OpenAIKeyOnly:
+    """A user who saved an OpenAI key and nothing else."""
+
+    async def resolve(self, user_id, provider):
+        if provider == "openai":
+            return ProviderCredentials(api_key="sk-openai-test-1234", source="user", owner=str(user_id))
+        return None
+
+
+def test_creating_an_openai_conversation_without_a_key_is_a_clear_400():
+    with _build_test_client() as client:
+        response = client.post("/chat/conversations", json={"title": "t", "model": "gpt-5.5"})
+
+    assert response.status_code == 400
+    assert "Add one in Settings" in response.json()["detail"]
+
+
+def test_creating_an_openai_conversation_checks_the_model_against_the_users_list(monkeypatch):
+    created = {}
+
+    async def fake_create_conversation(self, *, user_id, title, model, provider=None):
+        created["model"] = model
+        return SimpleNamespace(
+            id=uuid4(), title=title, model=model,
+            created_at=datetime.now(tz=timezone.utc), updated_at=datetime.now(tz=timezone.utc),
+        )
+
+    async def fake_catalog(cls, credentials=None):
+        assert credentials.api_key == "sk-openai-test-1234"  # this user's key, not another provider's
+        return [{"id": "gpt-5.4", "name": "gpt-5.4"}]
+
+    monkeypatch.setattr(chat_module.ChatRepository, "create_conversation", fake_create_conversation)
+    monkeypatch.setattr(OpenAIProvider, "model_catalog", classmethod(fake_catalog))
+
+    with _build_test_client(credentials=_OpenAIKeyOnly()) as client:
+        ok = client.post("/chat/conversations", json={"title": "t", "model": "gpt-5.4"})
+        bad = client.post("/chat/conversations", json={"title": "t", "model": "gpt-9-nope"})
+
+    assert ok.status_code == 201 and created["model"] == "gpt-5.4"
+    assert bad.status_code == 400 and "Unsupported OpenAI model" in bad.json()["detail"]
+
+
+def test_models_and_health_include_openai_for_the_user(monkeypatch):
+    async def fake_catalog(cls, credentials=None):
+        return [{"id": "gpt-5.5", "name": "gpt-5.5"}] if credentials else []
+
+    async def no_models(cls, credentials=None):
+        return []
+
+    monkeypatch.setattr(OpenAIProvider, "model_catalog", classmethod(fake_catalog))
+    monkeypatch.setattr(OllamaProvider, "list_models", classmethod(no_models))
+    monkeypatch.setattr(AnthropicProvider, "model_catalog", classmethod(lambda cls, credentials=None: _async([])))
+
+    with _build_test_client(credentials=_OpenAIKeyOnly()) as client:
+        models = client.get("/chat/models").json()
+        health = client.get("/chat/providers/health").json()
+
+    assert models["openai"] == [{"id": "gpt-5.5", "name": "gpt-5.5", "provider": "openai"}]
+    assert health["openai"]["healthy"] is True and health["openai"]["circuit_open"] is False
+    assert health["anthropic"]["healthy"] is False
+
+
+async def _async(value):
+    return value
+
+
+# ---------------------------------------------------------------- stored provider and saved defaults
+
+
+class _SpyCredentials:
+    """Records which provider credentials were asked for, and has a key for ollama_cloud and openai."""
+
+    def __init__(self):
+        self.asked: list[str] = []
+
+    async def resolve(self, user_id, provider):
+        self.asked.append(provider)
+        if provider in ("ollama_cloud", "openai"):
+            return ProviderCredentials(api_key=f"key-for-{provider}", source="user", owner=str(user_id))
+        return None
+
+
+class _Preferences(NoPreferences):
+    def __init__(self, default=None, enabled=None):
+        self._default = default
+        self._enabled = enabled
+
+    async def default_for(self, user_id):
+        return self._default
+
+    async def only_enabled(self, user_id, listing):
+        if self._enabled is None:
+            return listing
+        return {pid: [m for m in models if m["id"] in self._enabled.get(pid, [m["id"] for m in models])] for pid, models in listing.items()}
+
+
+def _capture_create(monkeypatch):
+    created = {}
+
+    async def fake_create_conversation(self, *, user_id, title, model, provider=None):
+        created.update(model=model, provider=provider)
+        return SimpleNamespace(
+            id=uuid4(), title=title, model=model, provider=provider,
+            created_at=datetime.now(tz=timezone.utc), updated_at=datetime.now(tz=timezone.utc),
+        )
+
+    monkeypatch.setattr(chat_module.ChatRepository, "create_conversation", fake_create_conversation)
+    return created
+
+
+def _ollama_cloud_catalog(monkeypatch, *names):
+    from app.services.llm.ollama_cloud_provider import OllamaCloudProvider
+    from app.services.llm.base import ModelInfo
+
+    async def fake_list(cls, credentials):
+        return [ModelInfo(id=n, name=n) for n in names] if credentials else []
+
+    monkeypatch.setattr(OllamaCloudProvider, "list_models", classmethod(fake_list))
+
+
+def test_an_explicit_provider_is_stored_and_returned_even_when_names_collide(monkeypatch):
+    created = _capture_create(monkeypatch)
+    _ollama_cloud_catalog(monkeypatch, "gpt-oss:120b")
+
+    with _build_test_client(credentials=_SpyCredentials()) as client:
+        cloud = client.post("/chat/conversations", json={"title": "t", "model": "gpt-oss:120b", "provider": "ollama_cloud"})
+        local = client.post("/chat/conversations", json={"title": "t", "model": "gpt-oss:20b"})
+
+    assert cloud.status_code == 201 and cloud.json()["provider"] == "ollama_cloud"
+    assert local.status_code == 201 and local.json()["provider"] == "ollama"  # inferred, then stored
+    assert created == {"model": "gpt-oss:20b", "provider": "ollama"}
+
+
+def test_a_cloud_conversation_without_a_key_is_a_clear_400(monkeypatch):
+    _capture_create(monkeypatch)
+
+    with _build_test_client() as client:  # no credentials for anything
+        response = client.post("/chat/conversations", json={"title": "t", "model": "gpt-oss:120b", "provider": "ollama_cloud"})
+
+    assert response.status_code == 400 and "Add one in Settings" in response.json()["detail"]
+
+
+def test_an_unknown_provider_is_a_400(monkeypatch):
+    _capture_create(monkeypatch)
+
+    with _build_test_client() as client:
+        response = client.post("/chat/conversations", json={"title": "t", "model": "x", "provider": "mistral"})
+
+    assert response.status_code == 400 and "Unknown provider: mistral" in response.json()["detail"]
+
+
+def test_a_model_from_another_providers_list_is_rejected_for_the_chosen_provider(monkeypatch):
+    _capture_create(monkeypatch)
+    _ollama_cloud_catalog(monkeypatch, "gpt-oss:120b")
+
+    with _build_test_client(credentials=_SpyCredentials()) as client:
+        response = client.post("/chat/conversations", json={"title": "t", "model": "llama3.2:3b", "provider": "ollama_cloud"})
+
+    assert response.status_code == 400 and "Unsupported Ollama Cloud model" in response.json()["detail"]
+
+
+def test_with_no_choice_in_the_request_the_users_saved_default_is_used(monkeypatch):
+    created = _capture_create(monkeypatch)
+    _ollama_cloud_catalog(monkeypatch, "gpt-oss:120b")
+
+    with _build_test_client(credentials=_SpyCredentials(), model_settings=_Preferences(("ollama_cloud", "gpt-oss:120b"))) as client:
+        response = client.post("/chat/conversations", json={"title": "t"})
+
+    assert response.status_code == 201
+    assert created == {"model": "gpt-oss:120b", "provider": "ollama_cloud"}
+
+
+def test_a_saved_default_that_no_longer_works_falls_back_to_the_server_default(monkeypatch):
+    created = _capture_create(monkeypatch)
+    _ollama_cloud_catalog(monkeypatch, "kimi-k2")  # the saved model is gone from the list
+
+    with _build_test_client(credentials=_SpyCredentials(), model_settings=_Preferences(("ollama_cloud", "gpt-oss:120b"))) as client:
+        response = client.post("/chat/conversations", json={"title": "t"})
+
+    assert response.status_code == 201
+    assert created["model"] == chat_module.settings.DEFAULT_MODEL and created["provider"] == "ollama"
+
+
+def test_a_request_that_names_a_model_ignores_the_saved_default(monkeypatch):
+    created = _capture_create(monkeypatch)
+
+    with _build_test_client(model_settings=_Preferences(("ollama_cloud", "gpt-oss:120b"))) as client:
+        response = client.post("/chat/conversations", json={"title": "t", "model": "llama3.2:3b"})
+
+    assert response.status_code == 201 and created == {"model": "llama3.2:3b", "provider": "ollama"}
+
+
+def _send_with_conversation(monkeypatch, conversation, credentials):
+    seen = {}
+
+    async def fake_get(self, *, conversation_id, user_id):
+        return conversation
+
+    async def fake_create_message(self, **kwargs):
+        return SimpleNamespace(
+            id=uuid4(), conversation_id=kwargs["conversation_id"], role=kwargs["role"], content=kwargs["content"],
+            model=kwargs.get("model"), tokens_used=1, sources=[], metadata_json=kwargs.get("metadata", {}),
+            created_at=datetime.now(tz=timezone.utc),
+        )
+
+    async def fake_reply(cls, **kwargs):
+        seen.update(kwargs)
+        return "ok", {"provider": kwargs["provider"] or "inferred", "model": kwargs["model"]}
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get)
+    monkeypatch.setattr(chat_module.ChatRepository, "create_message", fake_create_message)
+    monkeypatch.setattr(chat_module.LLMService, "generate_chat_reply", classmethod(fake_reply))
+
+    with _build_test_client(credentials=credentials) as client:
+        response = client.post(f"/chat/conversations/{conversation.id}/messages", json={"content": "hi", "use_rag": False})
+    return response, seen
+
+
+def test_a_conversation_runs_on_the_provider_stored_with_it(monkeypatch):
+    spy = _SpyCredentials()
+    conversation = SimpleNamespace(id=uuid4(), model="gpt-oss:120b", provider="ollama_cloud", system_prompt=None)
+
+    response, seen = _send_with_conversation(monkeypatch, conversation, spy)
+
+    assert response.status_code == 200
+    assert spy.asked == ["ollama_cloud"]  # the cloud key, not the local Ollama's
+    assert seen["provider"] == "ollama_cloud" and seen["credentials"].api_key == "key-for-ollama_cloud"
+
+
+def test_a_conversation_from_before_providers_were_stored_is_inferred_from_its_model(monkeypatch):
+    spy = _SpyCredentials()
+    conversation = SimpleNamespace(id=uuid4(), model="gpt-5.5", system_prompt=None)  # no provider attribute
+
+    response, seen = _send_with_conversation(monkeypatch, conversation, spy)
+
+    assert response.status_code == 200 and spy.asked == ["openai"] and seen["provider"] == "openai"
+
+
+def test_reading_a_conversation_reports_its_provider_inferred_for_old_rows(monkeypatch):
+    async def fake_get(self, *, conversation_id, user_id):
+        return SimpleNamespace(
+            id=uuid4(), title="t", model="claude-sonnet-5-5", provider=None,
+            created_at=datetime.now(tz=timezone.utc), updated_at=datetime.now(tz=timezone.utc),
+        )
+
+    monkeypatch.setattr(chat_module.ChatRepository, "get_conversation_for_user", fake_get)
+
+    with _build_test_client() as client:
+        response = client.get(f"/chat/conversations/{uuid4()}")
+
+    assert response.status_code == 200 and response.json()["provider"] == "anthropic"
+
+
+def test_the_model_list_hides_models_the_user_switched_off_unless_all_is_asked_for(monkeypatch):
+    listing = {
+        "openai": [{"id": "gpt-5.5", "provider": "openai"}, {"id": "o3", "provider": "openai"}],
+        "ollama": [{"id": "llama3.2:3b", "provider": "ollama"}],
+    }
+
+    async def fake_list_models(cls, *args, **kwargs):
+        return listing
+
+    monkeypatch.setattr(chat_module.LLMService, "list_models", classmethod(fake_list_models))
+    prefs = _Preferences(enabled={"openai": ["o3"]})
+
+    with _build_test_client(model_settings=prefs) as client:
+        mine = client.get("/chat/models").json()
+        everything = client.get("/chat/models?all=true").json()
+
+    assert [m["id"] for m in mine["openai"]] == ["o3"] and len(mine["ollama"]) == 1
+    assert [m["id"] for m in everything["openai"]] == ["gpt-5.5", "o3"]

@@ -10,7 +10,13 @@ from loguru import logger
 from starlette.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.deps import db_session, get_credential_service, get_current_user
+from app.api.deps import (
+    db_session,
+    get_credential_service,
+    get_current_user,
+    get_memory_provider,
+    get_model_settings_service,
+)
 from app.core.config import settings
 from app.models import User
 from app.repositories import ChatRepository
@@ -23,8 +29,9 @@ from app.schemas.chat import (
     MessageResponse,
 )
 from app.services.credential_service import CredentialService
-from app.services.llm_service import LLMService, ProviderCredentials, StreamOutcome
-from app.services.vector_search_service import VectorSearchService
+from app.services.llm_service import PROVIDER_IDS, LLMService, ProviderCredentials, StreamOutcome, UnsupportedModel
+from app.services.memory import MemoryProvider
+from app.services.model_settings_service import ModelSettingsService
 
 
 router = APIRouter(prefix="/chat")
@@ -41,19 +48,39 @@ def _estimate_tokens(text: str) -> int:
     return max(int(len(text.split()) * 1.3), 1)
 
 
-async def _resolve_model(model: str | None, credentials: ProviderCredentials | None = None) -> str:
+async def _resolve_model(
+    model: str | None,
+    provider: str | None,
+    credential_service: CredentialService,
+    user_id: UUID,
+) -> tuple[str, str]:
+    """The (provider, model) to store. An explicit provider wins; without one it is inferred from the name."""
     selected = (model or settings.DEFAULT_MODEL).strip()
     if not selected:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Model is required")
-    if selected.lower().startswith("claude-"):
-        selected = LLMService.normalize_claude_model(selected)
-        allowed = await LLMService.allowed_claude_models(credentials)
-        if selected not in allowed:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=f"Unsupported Anthropic model. Allowed: {sorted(allowed)}",
-            )
-    return selected
+    try:
+        provider_id = LLMService.choose_provider(selected, provider)
+        credentials = await credential_service.resolve(user_id, provider_id)
+        return provider_id, await LLMService.resolve_model(selected, credentials, provider_id)
+    except UnsupportedModel as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+
+
+def _as_conversation_response(row) -> ConversationResponse:
+    return ConversationResponse(
+        id=str(row.id),
+        title=row.title,
+        model=row.model,
+        provider=LLMService.provider_for_conversation(row),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+async def _credentials_by_provider(
+    credential_service: CredentialService, user_id: UUID
+) -> dict[str, ProviderCredentials | None]:
+    return {provider_id: await credential_service.resolve(user_id, provider_id) for provider_id in PROVIDER_IDS}
 
 
 def _as_message_response(message) -> MessageResponse:
@@ -71,38 +98,36 @@ def _as_message_response(message) -> MessageResponse:
 
 
 async def _retrieve_sources(
-    session: AsyncSession,
+    memory: MemoryProvider,
     *,
     user_id: UUID,
     query: str,
     use_rag: bool,
-) -> tuple[list[dict], list[str]]:
+) -> tuple[list[dict], list[str], dict]:
+    """Returns sources, context lines and the memory facts to store on the reply."""
     if not use_rag:
-        return [], []
-    search_results = await VectorSearchService(session).search(
-        user_id=user_id,
-        query=query,
-        limit=3,
-        offset=0,
-        min_score=0.1,
-    )
+        return [], [], {}
+    outcome = await memory.search(user_id=user_id, query=query, limit=3, offset=0, min_score=0.1)
     sources = [
         {
-            "source_id": f"{row['document_id']}:{row['chunk_index']}",
-            "document_id": row["document_id"],
-            "original_filename": row["original_filename"],
-            "chunk_index": row["chunk_index"],
+            "source_id": f"{row.document_id}:{row.chunk_index}",
+            "document_id": row.document_id,
+            "original_filename": row.original_filename,
+            "chunk_index": row.chunk_index,
             "rank": rank,
-            "score": row["score"],
-            "snippet": _snippet(row["content"]),
-            "content_hash": row.get("content_hash"),
-            "span_start": row.get("span_start"),
-            "span_end": row.get("span_end"),
+            "score": row.score,
+            "snippet": _snippet(row.content),
+            "content_hash": row.content_hash,
+            "span_start": row.span_start,
+            "span_end": row.span_end,
         }
-        for rank, row in enumerate(search_results, start=1)
+        for rank, row in enumerate(outcome.results, start=1)
     ]
     context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
-    return sources, context_lines
+    memory_meta: dict = {"memory_mode": outcome.mode}
+    if outcome.degraded_reason:
+        memory_meta["memory_degraded_reason"] = outcome.degraded_reason
+    return sources, context_lines, memory_meta
 
 
 async def _load_history(chat_repo: ChatRepository, conversation) -> list[dict[str, str]]:
@@ -120,7 +145,7 @@ async def _process_chat_turn(
     current_user: User,
     conversation,
     payload: MessageCreateRequest,
-    session: AsyncSession,
+    memory: MemoryProvider,
     credentials: ProviderCredentials | None = None,
 ) -> ChatTurnResponse:
     # Load history before saving the new message so it is not sent twice.
@@ -134,8 +159,8 @@ async def _process_chat_turn(
         metadata={"rag_used": payload.use_rag},
     )
 
-    sources, context_lines = await _retrieve_sources(
-        session,
+    sources, context_lines, memory_meta = await _retrieve_sources(
+        memory,
         user_id=current_user.id,
         query=payload.content,
         use_rag=payload.use_rag,
@@ -148,6 +173,7 @@ async def _process_chat_turn(
         history=history,
         system_prompt=getattr(conversation, "system_prompt", None),
         credentials=credentials,
+        provider=LLMService.provider_for_conversation(conversation),
     )
     context_documents = list({UUID(source["document_id"]) for source in sources}) if sources else None
     assistant_message = await chat_repo.create_message(
@@ -162,6 +188,7 @@ async def _process_chat_turn(
             **llm_metadata,
             "rag_used": payload.use_rag,
             "source_count": len(sources),
+            **memory_meta,
         },
     )
 
@@ -179,15 +206,25 @@ async def create_conversation(
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
     credentials: CredentialService = Depends(get_credential_service),
+    model_settings: ModelSettingsService = Depends(get_model_settings_service),
 ) -> ConversationResponse:
     chat_repo = ChatRepository(session)
-    claude_credentials = None
-    if (payload.model or "").strip().lower().startswith("claude-"):
-        claude_credentials = await credentials.resolve(current_user.id, "anthropic")
+    model, provider = payload.model, payload.provider
+    if not (model or "").strip() and provider is None:
+        # No choice in the request: use the user's saved default, if they have one and it still works.
+        saved = await model_settings.default_for(current_user.id)
+        if saved is not None:
+            try:
+                provider, model = saved[0], saved[1]
+                await _resolve_model(model, provider, credentials, current_user.id)
+            except HTTPException:
+                provider, model = None, None
+    provider, model = await _resolve_model(model, provider, credentials, current_user.id)
     row = await chat_repo.create_conversation(
         user_id=current_user.id,
         title=payload.title,
-        model=await _resolve_model(payload.model, claude_credentials),
+        model=model,
+        provider=provider,
     )
     logger.bind(
         request_id=getattr(request.state, "request_id", None),
@@ -195,13 +232,7 @@ async def create_conversation(
         user_id=str(current_user.id),
         conversation_id=str(row.id),
     ).info("Conversation created")
-    return ConversationResponse(
-        id=str(row.id),
-        title=row.title,
-        model=row.model,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+    return _as_conversation_response(row)
 
 
 @router.get("/conversations", response_model=list[ConversationResponse])
@@ -234,13 +265,7 @@ async def list_conversations(
         sort=sort,
     )
     return [
-        ConversationResponse(
-            id=str(row.id),
-            title=row.title,
-            model=row.model,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-        )
+        _as_conversation_response(row)
         for row in rows
     ]
 
@@ -263,13 +288,7 @@ async def get_conversation(
         user_id=str(current_user.id),
         conversation_id=str(conversation_id),
     ).info("Conversation fetched")
-    return ConversationResponse(
-        id=str(row.id),
-        title=row.title,
-        model=row.model,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+    return _as_conversation_response(row)
 
 
 @router.delete("/conversations/{conversation_id}", status_code=status.HTTP_204_NO_CONTENT)
@@ -312,13 +331,7 @@ async def update_conversation(
         user_id=str(current_user.id),
         conversation_id=str(conversation_id),
     ).info("Conversation updated")
-    return ConversationResponse(
-        id=str(row.id),
-        title=row.title,
-        model=row.model,
-        created_at=row.created_at,
-        updated_at=row.updated_at,
-    )
+    return _as_conversation_response(row)
 
 
 @router.post("/conversations/{conversation_id}/messages", response_model=ChatTurnResponse)
@@ -329,6 +342,7 @@ async def send_message(
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
     credential_service: CredentialService = Depends(get_credential_service),
+    memory: MemoryProvider = Depends(get_memory_provider),
 ) -> ChatTurnResponse:
     chat_repo = ChatRepository(session)
     conversation = await chat_repo.get_conversation_for_user(
@@ -343,8 +357,8 @@ async def send_message(
         current_user=current_user,
         conversation=conversation,
         payload=payload,
-        session=session,
-        credentials=await credential_service.resolve(current_user.id, LLMService.provider_for(conversation.model)),
+        memory=memory,
+        credentials=await credential_service.resolve(current_user.id, LLMService.provider_for_conversation(conversation)),
     )
 
     logger.bind(
@@ -366,12 +380,13 @@ async def stream_message(
     session: AsyncSession = Depends(db_session),
     current_user: User = Depends(get_current_user),
     credential_service: CredentialService = Depends(get_credential_service),
+    memory: MemoryProvider = Depends(get_memory_provider),
 ) -> StreamingResponse:
     chat_repo = ChatRepository(session)
     conversation = await chat_repo.get_conversation_for_user(conversation_id=conversation_id, user_id=current_user.id)
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
-    provider_credentials = await credential_service.resolve(current_user.id, LLMService.provider_for(conversation.model))
+    provider_credentials = await credential_service.resolve(current_user.id, LLMService.provider_for_conversation(conversation))
 
     async def _events():
         # Load history before saving the new message so it is not sent twice.
@@ -384,8 +399,8 @@ async def stream_message(
             tokens_used=_estimate_tokens(payload.content),
             metadata={"rag_used": payload.use_rag},
         )
-        sources, context_lines = await _retrieve_sources(
-            session,
+        sources, context_lines, memory_meta = await _retrieve_sources(
+            memory,
             user_id=current_user.id,
             query=payload.content,
             use_rag=payload.use_rag,
@@ -403,6 +418,7 @@ async def stream_message(
                 system_prompt=getattr(conversation, "system_prompt", None),
                 outcome=outcome,
                 credentials=provider_credentials,
+                provider=LLMService.provider_for_conversation(conversation),
             ):
                 accumulated += delta
                 yield f"event: delta\ndata: {json.dumps({'text': delta})}\n\n"
@@ -425,12 +441,13 @@ async def stream_message(
         measured_total = (outcome.input_tokens or 0) + (outcome.output_tokens or 0)
         total_tokens = measured_total or estimate
         assistant_metadata = {
-            "provider": "anthropic" if LLMService.is_anthropic_model(conversation.model) else "ollama",
+            "provider": LLMService.provider_for_conversation(conversation),
             "model": conversation.model,
             "rag_used": payload.use_rag,
             "source_count": len(sources),
             "token_estimate": estimate,
             "total_tokens": total_tokens,
+            **memory_meta,
         }
         if outcome.input_tokens:
             assistant_metadata["input_tokens"] = outcome.input_tokens
@@ -522,13 +539,13 @@ async def list_messages(
 
 @router.get("/models")
 async def list_chat_models(
+    all: bool = Query(default=False, description="Include models the user switched off in Settings"),
     current_user: User = Depends(get_current_user),
     credentials: CredentialService = Depends(get_credential_service),
+    model_settings: ModelSettingsService = Depends(get_model_settings_service),
 ) -> dict:
-    return await LLMService.list_models(
-        ollama=await credentials.resolve(current_user.id, "ollama"),
-        anthropic_credentials=await credentials.resolve(current_user.id, "anthropic"),
-    )
+    listing = await LLMService.list_models(await _credentials_by_provider(credentials, current_user.id))
+    return listing if all else await model_settings.only_enabled(current_user.id, listing)
 
 
 @router.get("/providers/health")
@@ -536,7 +553,4 @@ async def provider_health(
     current_user: User = Depends(get_current_user),
     credentials: CredentialService = Depends(get_credential_service),
 ) -> dict:
-    return await LLMService.provider_health(
-        ollama=await credentials.resolve(current_user.id, "ollama"),
-        anthropic_credentials=await credentials.resolve(current_user.id, "anthropic"),
-    )
+    return await LLMService.provider_health(await _credentials_by_provider(credentials, current_user.id))

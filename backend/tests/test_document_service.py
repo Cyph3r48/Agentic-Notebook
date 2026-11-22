@@ -10,7 +10,9 @@ import pytest
 from fastapi import UploadFile
 
 from app.core.config import settings
+from app.services import document_service as document_service_module
 from app.services.document_service import DocumentService
+from app.services.memory import IngestOutcome
 
 
 class _FakeRepo:
@@ -94,6 +96,29 @@ class _FakeRepo:
 class _FakeSession:
     async def refresh(self, _doc):
         return None
+
+
+class _RecordingMemory:
+    """Stands in for the memory backend so these tests never reach Qdrant or the embedding service."""
+
+    def __init__(self):
+        self.outcome = IngestOutcome(vector_indexed="disabled")
+        self.ingested: list[dict] = []
+        self.deleted: list[tuple] = []
+
+    async def ingest(self, **kwargs):
+        self.ingested.append(kwargs)
+        return self.outcome
+
+    async def delete(self, *, user_id, document_id):
+        self.deleted.append((user_id, document_id))
+
+
+@pytest.fixture(autouse=True)
+def memory(monkeypatch):
+    recording = _RecordingMemory()
+    monkeypatch.setattr(document_service_module, "get_memory_provider", lambda session: recording)
+    return recording
 
 
 def _minimal_broken_docx_bytes() -> bytes:
@@ -352,3 +377,67 @@ async def test_process_document_missing_document_returns_zero():
 
     count = await service.process_document(uuid4())
     assert count == 0
+
+
+async def _process_text(tmp_path, memory, text=b"alpha beta gamma"):
+    service = DocumentService(_FakeSession())
+    repo = _FakeRepo()
+    service.repo = repo
+    original_upload_dir = settings.UPLOAD_DIR
+    settings.UPLOAD_DIR = str(tmp_path)
+    try:
+        doc, _ = await service.stage_upload(
+            user_id=uuid4(), upload=UploadFile(filename="n.txt", file=BytesIO(text))
+        )
+        await service.process_document(doc.id)
+    finally:
+        settings.UPLOAD_DIR = original_upload_dir
+    return doc, repo
+
+
+@pytest.mark.asyncio
+async def test_process_document_stores_vector_ids_and_marks_the_document_indexed(tmp_path, memory):
+    memory.outcome = IngestOutcome(id_map={0: "point-0"}, vector_indexed=True)
+
+    doc, repo = await _process_text(tmp_path, memory)
+
+    assert doc.status == "completed"
+    assert repo.chunks[0]["vector_id"] == "point-0"
+    assert doc.metadata_json["vector_indexed"] is True
+    assert "vector_index_error" not in doc.metadata_json
+    assert memory.deleted and memory.ingested[0]["original_filename"] == "n.txt"
+
+
+@pytest.mark.asyncio
+async def test_a_failed_vector_index_does_not_fail_the_upload_but_is_recorded(tmp_path, memory):
+    memory.outcome = IngestOutcome(vector_indexed=False, error="Qdrant: could not connect")
+
+    doc, repo = await _process_text(tmp_path, memory)
+
+    assert doc.status == "completed"
+    assert repo.chunks and repo.chunks[0]["vector_id"] is None
+    assert doc.metadata_json["vector_indexed"] is False
+    assert doc.metadata_json["vector_index_error"] == "Qdrant: could not connect"
+
+
+@pytest.mark.asyncio
+async def test_document_with_vectors_off_is_marked_disabled(tmp_path, memory):
+    doc, _ = await _process_text(tmp_path, memory)
+
+    assert doc.metadata_json["vector_indexed"] == "disabled"
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_document_also_deletes_its_vectors(tmp_path, memory):
+    service = DocumentService(_FakeSession())
+    service.repo = _FakeRepo()
+    original_upload_dir = settings.UPLOAD_DIR
+    settings.UPLOAD_DIR = str(tmp_path)
+    user_id = uuid4()
+    try:
+        doc, _ = await service.stage_upload(user_id=user_id, upload=UploadFile(filename="x.txt", file=BytesIO(b"hi")))
+        await service.delete_document_for_user(document_id=doc.id, user_id=user_id)
+    finally:
+        settings.UPLOAD_DIR = original_upload_dir
+
+    assert memory.deleted == [(user_id, doc.id)]

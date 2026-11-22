@@ -157,7 +157,89 @@ async def test_delete_removes_the_row(credential_repo, master_key):
 
 
 @pytest.mark.asyncio
-async def test_openai_keys_can_be_stored_but_are_marked_unsupported(credential_repo, master_key):
+async def test_openai_keys_can_be_stored_and_the_provider_is_supported(credential_repo, master_key):
     service, user = _service(credential_repo, master_key), _user()
     status = await service.save(user, "openai", api_key="sk-openai-test-9999", base_url=None, base_url_provided=False)
-    assert status.supported is False and status.configured is True
+    assert status.supported is True and status.configured is True and status.key_hint == "9999"
+
+
+@pytest.mark.asyncio
+async def test_openai_resolution_order_user_then_server_then_none(credential_repo, master_key, monkeypatch):
+    service, user = _service(credential_repo, master_key), _user()
+    assert await service.resolve(user.id, "openai") is None
+    assert (await service.status_for(user.id, "openai")).source == "none"
+
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-server-wide-key-3333")
+    server = await service.resolve(user.id, "openai")
+    assert server.api_key == "sk-server-wide-key-3333" and server.source == "server"
+    assert (await service.status_for(user.id, "openai")).source == "server"
+
+    await service.save(user, "openai", api_key=SENTINEL, base_url=None, base_url_provided=False)
+    mine = await service.resolve(user.id, "openai")
+    assert mine.api_key == SENTINEL and mine.source == "user"
+
+
+@pytest.mark.asyncio
+async def test_openai_server_key_fallback_can_be_switched_off(credential_repo, master_key, monkeypatch):
+    monkeypatch.setattr(settings, "OPENAI_API_KEY", "sk-server-wide-key-3333")
+    monkeypatch.setattr(settings, "ALLOW_SERVER_PROVIDER_KEYS", False)
+    service, user = _service(credential_repo, master_key), _user()
+
+    assert await service.resolve(user.id, "openai") is None
+    assert (await service.status_for(user.id, "openai")).configured is False
+
+
+@pytest.mark.asyncio
+async def test_a_base_url_can_be_saved_only_for_providers_that_accept_one(credential_repo, master_key):
+    service = _service(credential_repo, master_key)
+    admin = SimpleNamespace(id=uuid4(), role="admin")
+
+    with pytest.raises(ValueError, match="Only Ollama has a base URL"):
+        await service.save(admin, "openai", api_key=None, base_url="https://example.com", base_url_provided=True)
+    status = await service.save(admin, "ollama", api_key=None, base_url="http://localhost:11434", base_url_provided=True)
+    assert status.base_url == "http://localhost:11434"
+
+
+@pytest.mark.asyncio
+async def test_openai_key_is_encrypted_in_storage_and_bound_to_its_owner(credential_repo, master_key):
+    service, user = _service(credential_repo, master_key), _user()
+    await service.save(user, "openai", api_key=SENTINEL, base_url=None, base_url_provided=False)
+
+    stored = credential_repo.rows[(user.id, "openai")].api_key_encrypted
+    assert SENTINEL not in stored
+
+    # The same ciphertext copied under another user or provider does not decrypt.
+    other = _user()
+    credential_repo.rows[(other.id, "openai")] = credential_repo.rows[(user.id, "openai")]
+    assert await service.resolve(other.id, "openai") is None
+
+
+@pytest.mark.asyncio
+async def test_ollama_cloud_needs_a_saved_key_and_has_no_base_url_or_server_fallback(credential_repo, master_key):
+    service, user = _service(credential_repo, master_key), _user()
+    assert await service.resolve(user.id, "ollama_cloud") is None
+    status = await service.status_for(user.id, "ollama_cloud")
+    assert (status.supported, status.configured, status.source) == (True, False, "none")
+
+    admin = SimpleNamespace(id=uuid4(), role="admin")
+    with pytest.raises(ValueError, match="Only Ollama has a base URL"):
+        await service.save(admin, "ollama_cloud", api_key=None, base_url="https://attacker.example", base_url_provided=True)
+
+    await service.save(user, "ollama_cloud", api_key=SENTINEL, base_url=None, base_url_provided=False)
+    mine = await service.resolve(user.id, "ollama_cloud")
+    assert mine.api_key == SENTINEL and mine.base_url is None and mine.source == "user"
+    assert (await service.status_for(user.id, "ollama_cloud")).source == "user"
+
+
+@pytest.mark.asyncio
+async def test_the_cloud_key_and_the_local_ollama_settings_are_separate_rows(credential_repo, master_key):
+    service = _service(credential_repo, master_key)
+    admin = SimpleNamespace(id=uuid4(), role="admin")
+    await service.save(admin, "ollama", api_key=None, base_url="http://localhost:11434", base_url_provided=True)
+    await service.save(admin, "ollama_cloud", api_key=SENTINEL, base_url=None, base_url_provided=False)
+
+    local = await service.resolve(admin.id, "ollama")
+    cloud = await service.resolve(admin.id, "ollama_cloud")
+
+    assert local.base_url == "http://localhost:11434" and local.api_key is None
+    assert cloud.api_key == SENTINEL and cloud.base_url is None
