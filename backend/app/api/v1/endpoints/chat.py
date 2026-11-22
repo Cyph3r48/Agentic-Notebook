@@ -28,10 +28,12 @@ from app.schemas.chat import (
     MessageCreateRequest,
     MessageResponse,
 )
+from app.services import audit
 from app.services.credential_service import CredentialService
 from app.services.llm_service import PROVIDER_IDS, LLMService, ProviderCredentials, StreamOutcome, UnsupportedModel
 from app.services.memory import MemoryProvider
 from app.services.model_settings_service import ModelSettingsService
+from app.services.security_gate import SecurityGate
 
 
 router = APIRouter(prefix="/chat")
@@ -100,14 +102,25 @@ def _as_message_response(message) -> MessageResponse:
 async def _retrieve_sources(
     memory: MemoryProvider,
     *,
-    user_id: UUID,
+    user: User,
     query: str,
     use_rag: bool,
+    request: Request | None = None,
 ) -> tuple[list[dict], list[str], dict]:
-    """Returns sources, context lines and the memory facts to store on the reply."""
+    """Returns sources, context lines and the memory facts to store on the reply.
+
+    Retrieval goes through the security layers: the whitelist gates the search, and every chunk is checked
+    against its stored hash and scanned for prompt injection. A chunk that fails is withheld from the model and
+    from the citations, and the event is audited.
+    """
     if not use_rag:
         return [], [], {}
-    outcome = await memory.search(user_id=user_id, query=query, limit=3, offset=0, min_score=0.1)
+    if not await SecurityGate.check_tool("search_memory", user.role, user.id, request):
+        return [], [], {"memory_denied": True}
+    outcome = await memory.search(user_id=user.id, query=query, limit=3, offset=0, min_score=0.1)
+    screened = SecurityGate.screen_chunks(outcome.results)
+    if screened.quarantined:
+        await SecurityGate.audit_quarantine(request, user.id, screened)
     sources = [
         {
             "source_id": f"{row.document_id}:{row.chunk_index}",
@@ -121,13 +134,55 @@ async def _retrieve_sources(
             "span_start": row.span_start,
             "span_end": row.span_end,
         }
-        for rank, row in enumerate(outcome.results, start=1)
+        for rank, row in enumerate(screened.kept, start=1)
     ]
     context_lines = [f"{source['original_filename']}#{source['chunk_index']}: {source['snippet']}" for source in sources]
     memory_meta: dict = {"memory_mode": outcome.mode}
     if outcome.degraded_reason:
         memory_meta["memory_degraded_reason"] = outcome.degraded_reason
+    if screened.quarantined:
+        # How many chunks were held back, so the UI can say so. Never which text or why in detail.
+        memory_meta["memory_quarantined"] = len(screened.quarantined)
     return sources, context_lines, memory_meta
+
+
+async def _screen_user_message(request: Request, user: User, content: str) -> bool:
+    """Layer 1 on the user's own message. Returns True when flagged; raises 400 when blocking is switched on."""
+    scan = SecurityGate.screen_message(content)
+    if not scan.flagged:
+        return False
+    blocked = settings.SMC_PI_GUARD_BLOCK_USER_INPUT
+    await SecurityGate.audit_user_message(request, user.id, scan, blocked)
+    if blocked:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="This message was blocked by the prompt-injection guard.",
+        )
+    return True
+
+
+async def _audit_chat_turn(
+    request: Request, user: User, conversation, payload: MessageCreateRequest, metadata: dict, sources: list, pi_flagged: bool
+) -> None:
+    """One audit row per chat turn: sizes, ids and flags only, never the message or the answer."""
+    await audit.record(
+        request,
+        "chat_message",
+        user_id=user.id,
+        resource_type="conversation",
+        resource_id=conversation.id,
+        details={
+            "provider": metadata.get("provider"),
+            "model": conversation.model,
+            "use_rag": payload.use_rag,
+            "message_chars": len(payload.content),
+            "source_count": len(sources),
+            "quarantined": metadata.get("memory_quarantined", 0),
+            "pi_flagged": pi_flagged,
+            "error_type": metadata.get("error_type"),
+        },
+        status_code=200,
+    )
 
 
 async def _load_history(chat_repo: ChatRepository, conversation) -> list[dict[str, str]]:
@@ -146,8 +201,10 @@ async def _process_chat_turn(
     conversation,
     payload: MessageCreateRequest,
     memory: MemoryProvider,
+    request: Request,
     credentials: ProviderCredentials | None = None,
 ) -> ChatTurnResponse:
+    pi_flagged = await _screen_user_message(request, current_user, payload.content)
     # Load history before saving the new message so it is not sent twice.
     history = await _load_history(chat_repo, conversation)
     user_message = await chat_repo.create_message(
@@ -156,14 +213,15 @@ async def _process_chat_turn(
         content=payload.content,
         model=conversation.model,
         tokens_used=_estimate_tokens(payload.content),
-        metadata={"rag_used": payload.use_rag},
+        metadata={"rag_used": payload.use_rag, **({"pi_flagged": True} if pi_flagged else {})},
     )
 
     sources, context_lines, memory_meta = await _retrieve_sources(
         memory,
-        user_id=current_user.id,
+        user=current_user,
         query=payload.content,
         use_rag=payload.use_rag,
+        request=request,
     )
 
     assistant_text, llm_metadata = await LLMService.generate_chat_reply(
@@ -191,6 +249,7 @@ async def _process_chat_turn(
             **memory_meta,
         },
     )
+    await _audit_chat_turn(request, current_user, conversation, payload, assistant_message.metadata_json or {}, sources, pi_flagged)
 
     return ChatTurnResponse(
         conversation_id=str(conversation.id),
@@ -358,6 +417,7 @@ async def send_message(
         conversation=conversation,
         payload=payload,
         memory=memory,
+        request=request,
         credentials=await credential_service.resolve(current_user.id, LLMService.provider_for_conversation(conversation)),
     )
 
@@ -387,6 +447,8 @@ async def stream_message(
     if conversation is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Conversation not found")
     provider_credentials = await credential_service.resolve(current_user.id, LLMService.provider_for_conversation(conversation))
+    # Checked before streaming starts, so a blocked message is a clean 400 and not a broken stream.
+    pi_flagged = await _screen_user_message(request, current_user, payload.content)
 
     async def _events():
         # Load history before saving the new message so it is not sent twice.
@@ -397,13 +459,14 @@ async def stream_message(
             content=payload.content,
             model=conversation.model,
             tokens_used=_estimate_tokens(payload.content),
-            metadata={"rag_used": payload.use_rag},
+            metadata={"rag_used": payload.use_rag, **({"pi_flagged": True} if pi_flagged else {})},
         )
         sources, context_lines, memory_meta = await _retrieve_sources(
             memory,
-            user_id=current_user.id,
+            user=current_user,
             query=payload.content,
             use_rag=payload.use_rag,
+            request=request,
         )
 
         accumulated = ""
@@ -477,6 +540,7 @@ async def stream_message(
             "sources": sources,
             "metadata": assistant_metadata,
         }
+        await _audit_chat_turn(request, current_user, conversation, payload, assistant_metadata, sources, pi_flagged)
         yield f"event: message\ndata: {json.dumps(message_payload)}\n\n"
         yield "event: done\ndata: {}\n\n"
 

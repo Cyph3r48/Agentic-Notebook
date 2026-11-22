@@ -25,3 +25,9 @@ class CurrentUserResponse(BaseModel):
 
 class RefreshTokenRequest(BaseModel):
     refresh_token: str
+
+
+class ChangePasswordRequest(BaseModel):
+    # Length rules live in `core.password_policy` so the messages are friendly; the schema only bounds the input.
+    current_password: str = Field(min_length=1, max_length=256)
+    new_password: str = Field(min_length=1, max_length=256)

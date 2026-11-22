@@ -19,3 +19,9 @@ class UserResponse(BaseModel):
     role: str
     is_active: bool
     is_verified: bool
+
+
+class ProfileUpdateRequest(BaseModel):
+    """What a user may change about themselves. Email and username are fixed."""
+
+    full_name: str | None = Field(default=None, max_length=255)

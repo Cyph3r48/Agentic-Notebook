@@ -35,17 +35,18 @@ export const settingsAPI = {
     return response.data
   },
 
-  // Placeholder for when backend adds update endpoints
-  // updateProfile: async (data) => {
-  //   const response = await apiClient.patch('/users/me', data)
-  //   return response.data
-  // },
-  //
-  // changePassword: async (oldPassword, newPassword) => {
-  //   const response = await apiClient.post('/auth/change-password', {
-  //     old_password: oldPassword,
-  //     new_password: newPassword,
-  //   })
-  //   return response.data
-  // },
+  // Change your display name. Email and username cannot be changed.
+  updateProfile: async (fullName) => {
+    const response = await apiClient.patch('/users/me', { full_name: fullName })
+    return response.data
+  },
+
+  // Change your password. Other devices are signed out; the response holds fresh tokens for this one.
+  changePassword: async (currentPassword, newPassword) => {
+    const response = await apiClient.post('/auth/change-password', {
+      current_password: currentPassword,
+      new_password: newPassword,
+    })
+    return response.data
+  },
 }

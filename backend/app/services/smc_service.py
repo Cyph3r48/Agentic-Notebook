@@ -9,7 +9,10 @@ Implements the 5-layer security architecture:
 """
 
 import hashlib
+import ipaddress
 import re
+import unicodedata
+from dataclasses import dataclass, field
 from datetime import datetime
 from datetime import timezone
 from typing import Optional, Dict, Any
@@ -29,64 +32,76 @@ class SMCService:
     # Layer 1: PI GUARD - Adversarial Detection
     # ============================================
     
-    # Adversarial patterns to detect
-    ADVERSARIAL_PATTERNS = [
-        r"ignore\s+(previous|all|prior)\s+instructions?",
-        r"disregard\s+(previous|all|prior)\s+(instructions?|prompts?)",
-        r"forget\s+(everything|all|previous)",
-        r"reveal\s+(system\s+)?prompts?",
-        r"show\s+(system\s+)?prompts?",
-        r"you\s+are\s+now",
-        r"new\s+instructions?",
-        r"override\s+instructions?",
-        r"bypass\s+(security|restrictions?|filters?)",
-        r"jailbreak",
-        r"pretend\s+you\s+are",
-        r"roleplay\s+as",
-        r"\[SYSTEM\]",
-        r"\[ADMIN\]",
-        r"<system>",
-        r"</system>",
-    ]
-    
+    # Explicit injection attempts: one match flags the text.
+    STRONG_PATTERNS = {
+        "ignore_instructions": r"ignore\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|all)\s+(?:instructions?|prompts?|rules?)",
+        "disregard_instructions": r"disregard\s+(?:all\s+|any\s+|the\s+)?(?:previous|prior|above|earlier|all)\s+(?:instructions?|prompts?|rules?)",
+        "forget_everything": r"forget\s+(?:everything|all\s+(?:previous|prior)|your\s+instructions)",
+        "reveal_system_prompt": r"(?:reveal|print|repeat|output|leak)\s+(?:your\s+|the\s+)?(?:system\s+)?(?:prompt|instructions)",
+        "override_instructions": r"override\s+(?:your\s+|the\s+|all\s+)?(?:instructions?|rules|safety)",
+        "bypass_security": r"bypass\s+(?:the\s+)?(?:security|restrictions?|filters?|safety|guardrails?)",
+        "jailbreak": r"jailbreak",
+        "system_tag": r"(?:\[system\]|\[admin\]|</?system>)",
+    }
+    # Phrases that are also ordinary English ("new instructions for the desk"): two different ones flag the text.
+    WEAK_PATTERNS = {
+        "you_are_now": r"you\s+are\s+now\b",
+        "new_instructions": r"new\s+instructions?",
+        "pretend": r"pretend\s+(?:you\s+are|to\s+be)",
+        "roleplay": r"role-?play\s+as",
+        "show_prompt": r"show\s+(?:me\s+)?(?:your\s+|the\s+)?(?:system\s+)?prompts?",
+    }
+    WEAK_MATCHES_TO_FLAG = 2
+
+    _INVISIBLE = re.compile("[\u200b-\u200f\u2060\ufeff\u00ad]")
+
+    @dataclass
+    class PIScan:
+        flagged: bool
+        strong: list[str] = field(default_factory=list)
+        weak: list[str] = field(default_factory=list)
+        risk_score: float = 0.0
+
+        @property
+        def patterns(self) -> list[str]:
+            return [*self.strong, *self.weak]
+
+    @classmethod
+    def _normalize_for_scan(cls, content: str) -> str:
+        """Fold look-alike characters and drop invisible ones so "i\u200bgnore" and full-width text still match."""
+        text = unicodedata.normalize("NFKC", content)
+        text = cls._INVISIBLE.sub("", text)
+        return re.sub(r"\s+", " ", text).lower()
+
+    @classmethod
+    def scan_text(cls, content: str) -> "SMCService.PIScan":
+        """Layer 1 as a pure function: no I/O, so it can run on every retrieved chunk."""
+        if not settings.SMC_PI_GUARD_ENABLED or not content:
+            return cls.PIScan(flagged=False)
+        text = cls._normalize_for_scan(content)
+        strong = [name for name, pattern in cls.STRONG_PATTERNS.items() if re.search(pattern, text)]
+        weak = [name for name, pattern in cls.WEAK_PATTERNS.items() if re.search(pattern, text)]
+        flagged = bool(strong) or len(weak) >= cls.WEAK_MATCHES_TO_FLAG
+        score = min(1.0, len(strong) * 1.0 + len(weak) * 0.4)
+        return cls.PIScan(flagged=flagged, strong=strong, weak=weak, risk_score=score)
+
     @classmethod
     async def pi_guard_check(cls, content: str, user_id: Optional[UUID] = None) -> Dict[str, Any]:
         """
         Layer 1: Check for adversarial patterns
-        Returns: {
-            "passed": bool,
-            "flagged_patterns": List[str],
-            "risk_score": float
-        }
+        Returns: {"passed": bool, "flagged_patterns": List[str] (names, not regexes), "risk_score": float}
         """
-        if not settings.SMC_PI_GUARD_ENABLED:
-            return {"passed": True, "flagged_patterns": [], "risk_score": 0.0}
-        
-        flagged = []
-        content_lower = content.lower()
-        
-        for pattern in cls.ADVERSARIAL_PATTERNS:
-            if re.search(pattern, content_lower, re.IGNORECASE):
-                flagged.append(pattern)
-        
-        risk_score = len(flagged) / len(cls.ADVERSARIAL_PATTERNS)
-        passed = risk_score < 0.1  # Threshold: 10%
-        
-        if not passed:
-            logger.warning(f"PI Guard flagged content from user {user_id}: {flagged}")
+        scan = cls.scan_text(content)
+        if scan.flagged:
+            logger.warning("PI Guard flagged content user_id={user_id} patterns={patterns}", user_id=user_id, patterns=scan.patterns)
             await cls._log_security_event(
                 user_id=user_id,
                 layer="PI_GUARD",
                 action="adversarial_pattern_detected",
-                details={"patterns": flagged, "risk_score": risk_score}
+                details={"patterns": scan.patterns, "risk_score": scan.risk_score},
             )
-        
-        return {
-            "passed": passed,
-            "flagged_patterns": flagged,
-            "risk_score": risk_score
-        }
-    
+        return {"passed": not scan.flagged, "flagged_patterns": scan.patterns, "risk_score": scan.risk_score}
+
     # ============================================
     # Layer 2: SANITIZER - Content Cleaning
     # ============================================
@@ -135,6 +150,13 @@ class SMCService:
         """Compute SHA-256 hash for content integrity"""
         return hashlib.sha256(content.encode('utf-8')).hexdigest()
     
+    @classmethod
+    def hash_matches(cls, content: str, expected_hash: str | None) -> bool:
+        """Layer 3 as a pure check. A chunk with no stored hash cannot be verified and is treated as failing."""
+        if not settings.SMC_RESOLVER_ENABLED:
+            return True
+        return bool(expected_hash) and cls.compute_hash(content) == expected_hash
+
     @classmethod
     async def verify_integrity(cls, content: str, expected_hash: str) -> bool:
         """
@@ -262,6 +284,27 @@ class SMCService:
     # Layer 5: CIFS AUDIT - Comprehensive Logging
     # ============================================
     
+    @staticmethod
+    def _valid_ip(value: Optional[str]) -> Optional[str]:
+        """The audit table stores a real IP address; anything else (a test client, a proxy name) becomes NULL."""
+        try:
+            return str(ipaddress.ip_address(value)) if value else None
+        except ValueError:
+            return None
+
+    @classmethod
+    async def _write_audit(cls, event: Dict[str, Any]) -> None:
+        """Persist one audit row in its own session, so a failed request is still recorded.
+
+        Never raises: a broken audit trail is logged at error level but must not take the app down.
+        """
+        try:
+            async with SessionLocal() as session:
+                session.add(AuditEvent(**event))
+                await session.commit()
+        except Exception as exc:
+            logger.error("Audit write failed action={action}: {error}", action=event.get("action"), error=type(exc).__name__)
+
     @classmethod
     async def audit_log(
         cls,
@@ -273,60 +316,61 @@ class SMCService:
         response_status: Optional[int] = None,
         error_message: Optional[str] = None,
         ip_address: Optional[str] = None,
-        user_agent: Optional[str] = None
+        user_agent: Optional[str] = None,
+        request_id: Optional[UUID] = None,
+        flagged: bool = False,
+        flag_reason: Optional[str] = None,
+        security_layer: str = "AUDIT",
     ) -> UUID:
         """
-        Layer 5: Log all interactions to audit trail
-        Returns audit log ID
+        Layer 5: Log an interaction to the audit trail. `request_body` must hold metadata only (sizes, ids, flags),
+        never message text, document text, passwords or keys. Returns the audit request id.
         """
+        audit_request_id = request_id or uuid4()
         if not settings.SMC_CIFS_AUDIT_ENABLED:
-            return uuid4()
-        
-        async with SessionLocal() as session:
-            request_id = uuid4()
+            return audit_request_id
+        await cls._write_audit(
+            {
+                "request_id": audit_request_id,
+                "user_id": user_id,
+                "action": action,
+                "resource_type": resource_type,
+                "resource_id": resource_id,
+                "ip_address": cls._valid_ip(ip_address),
+                "user_agent": (user_agent or "")[:500] or None,
+                "request_body": request_body,
+                "response_status": response_status,
+                "error_message": error_message,
+                "security_layer": security_layer,
+                "flagged": flagged,
+                "flag_reason": flag_reason,
+            }
+        )
+        return audit_request_id
 
-            session.add(
-                AuditEvent(
-                    request_id=request_id,
-                    user_id=user_id,
-                    action=action,
-                    resource_type=resource_type,
-                    resource_id=resource_id,
-                    ip_address=ip_address,
-                    user_agent=user_agent,
-                    request_body=request_body,
-                    response_status=response_status,
-                    error_message=error_message,
-                    security_layer="AUDIT",
-                    flagged=False,
-                )
-            )
-            await session.commit()
-        
-        return request_id
-    
     @classmethod
     async def _log_security_event(
         cls,
         layer: str,
         action: str,
         details: Dict[str, Any],
-        user_id: Optional[UUID] = None
+        user_id: Optional[UUID] = None,
+        request_id: Optional[UUID] = None,
     ) -> None:
-        """Internal helper to log security events"""
-        async with SessionLocal() as session:
-            session.add(
-                AuditEvent(
-                    request_id=uuid4(),
-                    user_id=user_id,
-                    action=action,
-                    security_layer=layer,
-                    flagged=True,
-                    flag_reason=f"{layer} security check failed",
-                    request_body=details,
-                )
-            )
-            await session.commit()
+        """A flagged event: something a security layer refused or caught."""
+        if not settings.SMC_CIFS_AUDIT_ENABLED:
+            return
+        await cls._write_audit(
+            {
+                "request_id": request_id or uuid4(),
+                "user_id": user_id,
+                "action": action,
+                "security_layer": layer,
+                "flagged": True,
+                "flag_reason": f"{layer} security check failed",
+                "request_body": details,
+            }
+        )
 
 
 # Create singleton instance

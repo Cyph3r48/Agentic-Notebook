@@ -99,11 +99,13 @@ Single-shot chat becomes a bounded loop: decide next action → (search memory |
 
 | Layer | State today |
 |---|---|
-| 1 PI Guard | Regex only; **not called** on the chat path; scoring threshold lets a single match pass |
+| 1 PI Guard | Regex, called on every retrieved chunk and on the user's message. One strong pattern flags; two different weak patterns flag. A flagged chunk is withheld from the model and the citations; a flagged user message is audited and still answered (`SMC_PI_GUARD_BLOCK_USER_INPUT=true` rejects it) |
 | 2 Sanitizer | Called on document ingest |
-| 3 Resolver (SHA-256) | Hash computed on ingest; verification not called |
-| 4 Tool whitelist | Implemented, **not called** |
-| 5 CIFS audit | Implemented, **not called** |
+| 3 Resolver (SHA-256) | Every retrieved chunk is hashed and compared with the hash stored at ingest; a mismatch or missing hash is withheld |
+| 4 Tool whitelist | Enforced for `search_memory` before retrieval. No other model-callable tools exist yet; the agent loop must send every tool through `SecurityGate.check_tool` |
+| 5 CIFS audit | Logins (success, failure, lockout), logout, password and profile changes, uploads, deletes, chats (sizes and flags only), withheld chunks. Own DB session; metadata only, never text, passwords or keys; a failed write is logged at error level and never breaks the request |
+
+Also in place: 5 failed logins per email and IP (or 5 wrong current-password checks per user) lock that key for 15 minutes (in memory, one worker); `ENVIRONMENT=production` refuses to start with a missing or placeholder JWT secret (32+ characters required), admin password, database password or Redis password; new passwords need 10+ characters and a change revokes all refresh sessions.
 
 v1 requirement: all five layers are on the request path, covered by tests, and PI Guard uses the Laya decision with regex as pre-filter.
 

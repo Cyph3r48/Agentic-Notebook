@@ -18,6 +18,7 @@ import {
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useAuth } from '../hooks/useAuth'
+import { useAuthStore } from '../store/authStore'
 import { useAllModels } from '../hooks/useChatModels'
 import { useProviderHealth } from '../hooks/useChatModels'
 import { settingsAPI } from '../api/settings'
@@ -150,6 +151,8 @@ export const Settings = () => {
         ...prev,
         fullName: updated.full_name || '',
       }))
+      // Keep the signed-in user in step so the sidebar shows the new name without a reload.
+      useAuthStore.getState().setUser({ ...useAuthStore.getState().user, full_name: updated.full_name })
       toast.success('Profile updated')
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to update profile')
@@ -167,16 +170,22 @@ export const Settings = () => {
       toast.error('New password and confirmation must match')
       return
     }
+    if (passwordForm.newPassword.length < 10) {
+      toast.error('The new password must be at least 10 characters')
+      return
+    }
 
     try {
       setIsSaving(true)
-      await settingsAPI.changePassword(passwordForm.currentPassword, passwordForm.newPassword)
+      const tokens = await settingsAPI.changePassword(passwordForm.currentPassword, passwordForm.newPassword)
+      // Every other session was signed out; this device continues on the fresh tokens.
+      useAuthStore.getState().setTokens(tokens.access_token, tokens.refresh_token)
       setPasswordForm({
         currentPassword: '',
         newPassword: '',
         confirmPassword: '',
       })
-      toast.success('Password changed')
+      toast.success('Password changed. Other devices were signed out.')
     } catch (error) {
       toast.error(error.response?.data?.message || 'Failed to change password')
     } finally {

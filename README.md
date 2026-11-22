@@ -37,7 +37,9 @@ docker compose logs -f backend
 | API | http://localhost:8000 (docs at `/api/docs`) |
 | Qdrant dashboard | http://localhost:6333/dashboard |
 
-Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from `.env` and change the password.
+Sign in with `ADMIN_EMAIL` / `ADMIN_PASSWORD` from your local env file, then change the password in Settings (10+ characters; this signs out your other devices).
+
+For a real deployment set `ENVIRONMENT=production`. The backend then refuses to start while `JWT_SECRET` (32+ characters), the admin password, the database password or the Redis password is missing or still a placeholder, and names which one. Other environments only log a warning. Five failed sign-ins for the same email and address lock that sign-in for 15 minutes (`LOGIN_MAX_FAILURES`, `LOGIN_LOCK_SECONDS`; kept in memory, so one worker). Text in a document that tries to hijack the model is withheld from the answer and recorded in the audit log. Set `SMC_PI_GUARD_BLOCK_USER_INPUT=true` to also reject your own messages that look like injection.
 
 ### Providers
 
