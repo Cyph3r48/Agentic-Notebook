@@ -16,6 +16,7 @@ import time
 from loguru import logger
 
 from app.core.config import settings
+from app.core.startup_checks import check_startup_security
 from app.core.bootstrap import ensure_admin_user
 from app.core.database import SessionLocal, init_db, close_db, is_db_healthy
 from app.core.errors import AppError, error_payload
@@ -35,6 +36,7 @@ async def lifespan(app: FastAPI):
 
     # Fail early and clearly when MEMORY_BACKEND names an adapter that does not exist yet.
     validate_memory_backend()
+    check_startup_security()
 
     if settings.AUTO_RUN_MIGRATIONS:
         if settings.ENVIRONMENT.lower() == "production" and not settings.FORCE_RUN_MIGRATIONS_IN_PRODUCTION:

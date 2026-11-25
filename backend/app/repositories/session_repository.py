@@ -53,6 +53,11 @@ class SessionRepository:
         await self.session.execute(delete(Session).where(Session.session_token == token))
         await self.session.commit()
 
+    async def delete_all_for_user(self, user_id: UUID) -> None:
+        """Sign the user out everywhere: every refresh token stops working."""
+        await self.session.execute(delete(Session).where(Session.user_id == user_id))
+        await self.session.commit()
+
     async def delete(self, row: Session) -> None:
         await self.session.delete(row)
         await self.session.commit()

@@ -47,7 +47,7 @@ services:
   tei:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.2
     container_name: si-tei
-    command: --model-id BAAI/bge-large-en-v1.5 --revision main
+    command: --model-id ${EMBEDDING_MODEL:-BAAI/bge-large-en-v1.5} --revision main
     volumes:
       - tei_data:/data
     networks:
@@ -98,8 +98,8 @@ services:
       
       # Embeddings
       EMBEDDING_URL: http://tei:80
-      EMBEDDING_MODEL: BAAI/bge-large-en-v1.5
-      EMBEDDING_DIM: 1024
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-BAAI/bge-large-en-v1.5}
+      EMBEDDING_DIM: ${EMBEDDING_DIM:-1024}
       VECTOR_INDEXING_ENABLED: ${VECTOR_INDEXING_ENABLED:-true}
       EMBEDDING_PROVIDER: ${EMBEDDING_PROVIDER:-tei}
       OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-embeddinggemma}
@@ -142,7 +142,6 @@ services:
       SMC_AUDIT_ENABLED: ${SMC_AUDIT_ENABLED:-true}
       
     volumes:
-      - ./backend:/app
       - upload_data:/app/uploads
       - ./logs:/app/logs
     networks:
@@ -161,27 +160,23 @@ services:
       retries: 3
     restart: unless-stopped
 
-  # Frontend - React with Vite
+  # Frontend - the built app served by nginx (a few MB of memory). For live editing use docker-compose.dev.yml.
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-      target: development
+      target: production
+      args:
+        VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
     container_name: si-frontend
-    environment:
-      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000/api/v1}
-      VITE_APP_NAME: "Structured Intelligence"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     networks:
       - si_net
     ports:
-      - "3000:3000"
+      - "3000:80"
     depends_on:
       - backend
     healthcheck:
-      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:3000 || exit 1"]
+      test: ["CMD-SHELL", "wget --no-verbose --tries=1 --spider http://127.0.0.1:80 || exit 1"]
       interval: 30s
       timeout: 10s
       retries: 3

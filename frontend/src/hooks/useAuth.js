@@ -34,7 +34,8 @@ export const useAuth = () => {
         
         return { success: true, user }
       } catch (error) {
-        const message = error.response?.data?.detail || 'Login failed'
+        const data = error.response?.data
+        const message = data?.message || data?.detail || 'Login failed'
         setError(message)
         throw new Error(message)
       } finally {

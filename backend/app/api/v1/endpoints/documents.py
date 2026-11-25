@@ -13,6 +13,7 @@ from app.core.database import SessionLocal
 from app.models import User
 from app.repositories import DocumentRepository
 from app.schemas.document import DocumentListItem, DocumentUploadResponse
+from app.services import audit
 from app.services.document_service import DocumentService
 
 
@@ -50,6 +51,9 @@ async def upload_document(
             background_tasks.add_task(process_document_in_background, doc.id)
     except ValueError as exc:
         log.warning("Upload rejected: {reason}", reason=str(exc))
+        await audit.record(
+            request, "document_upload_rejected", user_id=current_user.id, error=str(exc), status_code=400,
+        )
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
     except Exception as exc:
         log.exception("Upload failed: {}", exc)
@@ -62,6 +66,10 @@ async def upload_document(
     else:
         log.info("Upload deduplicated document_id={document_id} status={status}", document_id=str(doc.id), status=doc.status)
 
+    await audit.record(
+        request, "document_uploaded", user_id=current_user.id, resource_type="document", resource_id=doc.id,
+        details={"file_type": doc.file_type, "file_size": doc.file_size, "deduplicated": not is_new}, status_code=201,
+    )
     chunk_count = 0 if is_new else await repo.count_chunks(doc.id)
     return DocumentUploadResponse(
         id=str(doc.id),
@@ -94,6 +102,10 @@ async def delete_document(
         user_id=str(current_user.id),
         document_id=str(document_id),
     ).info("Document deleted")
+    await audit.record(
+        request, "document_deleted", user_id=current_user.id, resource_type="document", resource_id=document_id,
+        status_code=204,
+    )
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 

@@ -80,6 +80,14 @@ const ChatMessage = ({ message, isLast }) => {
               </div>
             </div>
 
+            {message.metadata?.memory_quarantined > 0 && (
+              <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-yellow-400 bg-yellow-400/10 px-2 py-1 rounded-md">
+                <AlertCircle className="w-3.5 h-3.5" />
+                {message.metadata.memory_quarantined} passage{message.metadata.memory_quarantined === 1 ? '' : 's'} from
+                your documents {message.metadata.memory_quarantined === 1 ? 'was' : 'were'} withheld by the security check
+              </p>
+            )}
+
             {message.metadata?.memory_mode === 'keyword_fallback' && (
               <p className="mt-3 inline-flex items-center gap-1.5 text-xs text-yellow-400 bg-yellow-400/10 px-2 py-1 rounded-md">
                 <AlertCircle className="w-3.5 h-3.5" />

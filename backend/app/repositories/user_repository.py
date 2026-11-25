@@ -53,6 +53,14 @@ class UserRepository:
         await self.session.refresh(user)
         return user
 
+    async def set_password_hash(self, user: User, password_hash: str) -> None:
+        user.password_hash = password_hash
+        await self.session.commit()
+
+    async def set_full_name(self, user: User, full_name: str | None) -> None:
+        user.full_name = full_name
+        await self.session.commit()
+
     async def set_last_login(self, user: User, value: datetime) -> None:
         user.last_login = value
         await self.session.commit()

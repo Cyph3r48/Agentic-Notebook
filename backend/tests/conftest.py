@@ -101,6 +101,11 @@ class FakeMemory:
             "score": 0.8,
         }
         values.update(overrides)
+        if "content_hash" not in overrides:
+            # A real chunk carries the hash made at ingest; without one the integrity check refuses it.
+            import hashlib
+
+            values["content_hash"] = hashlib.sha256(values["content"].encode("utf-8")).hexdigest()
         return self._chunk(**values)
 
     async def search(self, **kwargs):
@@ -132,3 +137,22 @@ class NoPreferences:
 
     async def only_enabled(self, user_id, listing):
         return listing
+
+
+@pytest.fixture(autouse=True)
+def audit_events(monkeypatch, request):
+    """Collect audit rows instead of writing them, so unit tests never need a database.
+
+    Database integration runs (RUN_DB_INTEGRATION_TESTS=1) and tests marked `real_audit` keep the real writer.
+    """
+    import os
+
+    events: list[dict] = []
+    if os.getenv("RUN_DB_INTEGRATION_TESTS") != "1" and request.node.get_closest_marker("real_audit") is None:
+        from app.services.smc_service import SMCService
+
+        async def collect(cls, event):
+            events.append(event)
+
+        monkeypatch.setattr(SMCService, "_write_audit", classmethod(collect))
+    return events

@@ -151,6 +151,13 @@ class Settings(BaseSettings):
     SMC_RESOLVER_ENABLED: bool = Field(default=True)
     SMC_TOOL_WHITELIST_ENABLED: bool = Field(default=True)
     SMC_CIFS_AUDIT_ENABLED: bool = Field(default=True)
+    # A chat message that trips the PI Guard is flagged and audited but still answered (it is the user's own
+    # conversation). Set this to refuse it with a 400 instead. Retrieved document text is always quarantined.
+    SMC_PI_GUARD_BLOCK_USER_INPUT: bool = Field(default=False)
+
+    # Failed sign-ins (and failed current-password checks) allowed before that account is locked for a while.
+    LOGIN_MAX_FAILURES: int = Field(default=5)
+    LOGIN_LOCK_SECONDS: int = Field(default=900)
     
     # ============================================
     # CORS
